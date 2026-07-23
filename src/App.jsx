@@ -44,6 +44,21 @@ const catFromDB = (r) => ({ cod: r.cod, nombre: r.nombre, tipo: r.tipo || null }
 const materialFromDB = (r) => ({ id: r.id, detalle: r.detalle, proveedor: r.proveedor, valorUnitario: Number(r.valor_unitario), cantidad: Number(r.cantidad) });
 const manoObraFromDB = (r) => ({ id: r.id, area: r.area, detalle: r.detalle, valorUnitario: Number(r.valor_unitario), cantidad: Number(r.cantidad) });
 const asuncionesFromDB = (r) => ({ cifPct: Number(r.cif_pct), margenMayoristaPct: Number(r.margen_mayorista_pct), margenDetalPct: Number(r.margen_detal_pct), ivaPct: Number(r.iva_pct) });
+const masterFromDB = (r) => ({
+  masterCode: r.master_code, costoTotal: Number(r.costo_total || 0), precioMayorista: Number(r.precio_mayorista || 0), precioDetal: Number(r.precio_detal || 0),
+  utilidadMayoristaPersonalizada: r.utilidad_mayorista_personalizada != null ? Number(r.utilidad_mayorista_personalizada) : null,
+  utilidadDetalPersonalizada: r.utilidad_detal_personalizada != null ? Number(r.utilidad_detal_personalizada) : null,
+});
+const EMPTY_MASTER = { costoTotal: 0, precioMayorista: 0, precioDetal: 0, utilidadMayoristaPersonalizada: null, utilidadDetalPersonalizada: null };
+
+async function saveMaster(masterCode, fields) {
+  const [row] = await sb(`product_masters?on_conflict=master_code`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ master_code: masterCode, ...fields }),
+  });
+  return row;
+}
 
 function calcularCosteo(materiales, manoObra, asunciones, utilidadMayPersonalizada, utilidadDetPersonalizada) {
   const materiaPrimaTotal = materiales.reduce((a, m) => a + m.valorUnitario * m.cantidad, 0);
@@ -136,6 +151,7 @@ export default function InventarioProductoTerminado() {
   const [products, setProducts] = useState([]);
   const [movements, setMovements] = useState([]);
   const [catalogs, setCatalogs] = useState({ categorias: [], segmentos: [], lineas: [], disenos: [], colores: [], tallas: [] });
+  const [masters, setMasters] = useState({});
   const [asunciones, setAsunciones] = useState(null);
   const [showAsunciones, setShowAsunciones] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -151,15 +167,19 @@ export default function InventarioProductoTerminado() {
     setLoading(true);
     setError(null);
     try {
-      const [prodRows, movRows, asuncionesRows, ...catRows] = await Promise.all([
+      const [prodRows, movRows, asuncionesRows, masterRows, ...catRows] = await Promise.all([
         sb("products?select=*&order=created_at.asc", { method: "GET" }),
         sb("movements?select=*&order=created_at.desc&limit=200", { method: "GET" }),
         sb("mopa_asunciones?select=*&id=eq.1", { method: "GET" }),
+        sb("product_masters?select=*", { method: "GET" }),
         ...Object.values(CATALOG_TABLES).map(t => sb(`${t}?select=*&order=orden.asc`, { method: "GET" })),
       ]);
       setProducts(prodRows.map(productFromDB));
       setMovements(movRows.map(movementFromDB));
       setAsunciones(asuncionesRows[0] ? asuncionesFromDB(asuncionesRows[0]) : { cifPct: 0.03, margenMayoristaPct: 0.4, margenDetalPct: 0.6, ivaPct: 0.19 });
+      const mastersDict = {};
+      masterRows.forEach(r => { mastersDict[r.master_code] = masterFromDB(r); });
+      setMasters(mastersDict);
       const keys = Object.keys(CATALOG_TABLES);
       const newCatalogs = {};
       keys.forEach((k, i) => { newCatalogs[k] = catRows[i].map(catFromDB); });
@@ -196,17 +216,16 @@ export default function InventarioProductoTerminado() {
     }
   }
 
-  function refreshProductInList(updated) {
-    setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
-    if (selected?.id === updated.id) setSelected(updated);
+  function onMasterUpdated(masterCode, masterData) {
+    setMasters(prev => ({ ...prev, [masterCode]: masterData }));
   }
 
   const kpis = useMemo(() => {
     const totalUnits = products.reduce((a, p) => a + p.stock, 0);
-    const totalValue = products.reduce((a, p) => a + p.stock * p.costoTotal, 0);
+    const totalValue = products.reduce((a, p) => a + p.stock * (masters[p.masterCode]?.costoTotal || 0), 0);
     const lowStock = products.filter(p => p.stock < p.minStock).length;
     return { skus: products.length, totalUnits, totalValue, lowStock };
-  }, [products]);
+  }, [products, masters]);
 
   function nextConsecutivo(codCategoria, codSegmento, codLinea, codDiseno) {
     const family = products.filter(p =>
@@ -362,6 +381,7 @@ export default function InventarioProductoTerminado() {
           )}
           {filtered.map(p => {
             const isLow = p.stock < p.minStock;
+            const master = masters[p.masterCode] || EMPTY_MASTER;
             return (
               <div key={p.id} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 140px", padding: "12px 16px", borderBottom: `1px solid ${TOKENS.border}`, alignItems: "center" }}>
                 <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 600 }}>{p.sku}</div>
@@ -371,7 +391,7 @@ export default function InventarioProductoTerminado() {
                 </div>
                 <div style={{ color: TOKENS.inkSoft, fontSize: 13 }}>{p.category}</div>
                 <StockGauge stock={p.stock} min={p.minStock} />
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{p.precioDetal > 0 ? fmtMoney(p.precioDetal) : "—"}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{master.precioDetal > 0 ? fmtMoney(master.precioDetal) : "—"}</div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <button onClick={() => setMovementFor(p)} title="Registrar movimiento" style={iconBtn}><ArrowUpCircle size={15} /></button>
                   <button onClick={() => setSelected(p)} title="Ver historial" style={iconBtn}><History size={15} /></button>
@@ -384,7 +404,8 @@ export default function InventarioProductoTerminado() {
 
       {selected && (
         <DetailDrawer product={selected} movements={productMovements(selected.id)} onClose={() => setSelected(null)}
-          asunciones={asunciones} onProductUpdated={refreshProductInList} />
+          asunciones={asunciones} masterData={masters[selected.masterCode] || EMPTY_MASTER} onMasterUpdated={onMasterUpdated}
+          variantCount={products.filter(p => p.masterCode === selected.masterCode).length} />
       )}
       {showAddProduct && (
         <AddProductModal
@@ -476,7 +497,7 @@ function ModalCenter({ children, onClose, width = 380 }) {
   );
 }
 
-function DetailDrawer({ product, movements, onClose, asunciones, onProductUpdated }) {
+function DetailDrawer({ product, movements, onClose, asunciones, masterData, onMasterUpdated, variantCount }) {
   const [tab, setTab] = useState("movimientos");
   return (
     <Overlay onClose={onClose} width={440}>
@@ -503,7 +524,7 @@ function DetailDrawer({ product, movements, onClose, asunciones, onProductUpdate
           </div>
           <div style={{ flex: 1, background: TOKENS.bg, borderRadius: 8, padding: 12 }}>
             <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Precio detal</div>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15 }}>{product.precioDetal > 0 ? fmtMoney(product.precioDetal) : "—"}</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15 }}>{masterData.precioDetal > 0 ? fmtMoney(masterData.precioDetal) : "—"}</div>
           </div>
         </div>
 
@@ -533,7 +554,13 @@ function DetailDrawer({ product, movements, onClose, asunciones, onProductUpdate
         )}
 
         {tab === "costeo" && (
-          <CostingPanel product={product} asunciones={asunciones} onProductUpdated={onProductUpdated} />
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: TOKENS.amberSoft, color: TOKENS.ink, fontSize: 11.5, padding: "8px 10px", borderRadius: 7, marginBottom: 14 }}>
+              <Calculator size={13} style={{ flexShrink: 0 }} />
+              Este costeo aplica al código maestro <strong>&nbsp;{product.masterCode}&nbsp;</strong> — se comparte con las {variantCount} variante{variantCount === 1 ? "" : "s"} de color/talla de este mismo diseño.
+            </div>
+            <CostingPanel masterCode={product.masterCode} masterData={masterData} asunciones={asunciones} onMasterUpdated={onMasterUpdated} />
+          </>
         )}
       </div>
     </Overlay>
@@ -563,13 +590,13 @@ function LineItemRow({ item, fields, onDelete }) {
   );
 }
 
-function CostingPanel({ product, asunciones, onProductUpdated }) {
+function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
   const [materiales, setMateriales] = useState([]);
   const [manoObra, setManoObra] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [utilMay, setUtilMay] = useState(product.utilidadMayoristaPersonalizada);
-  const [utilDet, setUtilDet] = useState(product.utilidadDetalPersonalizada);
+  const [utilMay, setUtilMay] = useState(masterData.utilidadMayoristaPersonalizada);
+  const [utilDet, setUtilDet] = useState(masterData.utilidadDetalPersonalizada);
 
   const [matForm, setMatForm] = useState({ detalle: "", proveedor: "", valorUnitario: "", cantidad: "1" });
   const [moForm, setMoForm] = useState({ area: "", detalle: "", valorUnitario: "", cantidad: "1" });
@@ -578,8 +605,8 @@ function CostingPanel({ product, asunciones, onProductUpdated }) {
     setLoading(true);
     try {
       const [matRows, moRows] = await Promise.all([
-        sb(`product_materiales?product_id=eq.${product.id}&select=*&order=created_at.asc`, { method: "GET" }),
-        sb(`product_mano_obra?product_id=eq.${product.id}&select=*&order=created_at.asc`, { method: "GET" }),
+        sb(`product_materiales?master_code=eq.${encodeURIComponent(masterCode)}&select=*&order=created_at.asc`, { method: "GET" }),
+        sb(`product_mano_obra?master_code=eq.${encodeURIComponent(masterCode)}&select=*&order=created_at.asc`, { method: "GET" }),
       ]);
       setMateriales(matRows.map(materialFromDB));
       setManoObra(moRows.map(manoObraFromDB));
@@ -589,7 +616,7 @@ function CostingPanel({ product, asunciones, onProductUpdated }) {
       setLoading(false);
     }
   }
-  useEffect(() => { load(); }, [product.id]);
+  useEffect(() => { load(); }, [masterCode]);
 
   async function addMaterial() {
     if (!matForm.detalle.trim() || !matForm.valorUnitario) return;
@@ -597,7 +624,7 @@ function CostingPanel({ product, asunciones, onProductUpdated }) {
       const [row] = await sb("product_materiales", {
         method: "POST",
         body: JSON.stringify({
-          product_id: product.id, detalle: matForm.detalle, proveedor: matForm.proveedor,
+          master_code: masterCode, detalle: matForm.detalle, proveedor: matForm.proveedor,
           valor_unitario: Number(matForm.valorUnitario), cantidad: Number(matForm.cantidad) || 1,
         }),
       });
@@ -615,7 +642,7 @@ function CostingPanel({ product, asunciones, onProductUpdated }) {
       const [row] = await sb("product_mano_obra", {
         method: "POST",
         body: JSON.stringify({
-          product_id: product.id, area: moForm.area, detalle: moForm.detalle,
+          master_code: masterCode, area: moForm.area, detalle: moForm.detalle,
           valor_unitario: Number(moForm.valorUnitario), cantidad: Number(moForm.cantidad) || 1,
         }),
       });
@@ -637,9 +664,9 @@ function CostingPanel({ product, asunciones, onProductUpdated }) {
         costo_total: calc.costoTotal, precio_mayorista: calc.precioMayConIva, precio_detal: calc.precioDetConIva,
         utilidad_mayorista_personalizada: utilMay, utilidad_detal_personalizada: utilDet,
       };
-      await sb(`products?id=eq.${product.id}`, { method: "PATCH", body: JSON.stringify(body) });
-      onProductUpdated({
-        ...product, costoTotal: calc.costoTotal, precioMayorista: calc.precioMayConIva, precioDetal: calc.precioDetConIva,
+      await saveMaster(masterCode, body);
+      onMasterUpdated(masterCode, {
+        costoTotal: calc.costoTotal, precioMayorista: calc.precioMayConIva, precioDetal: calc.precioDetConIva,
         utilidadMayoristaPersonalizada: utilMay, utilidadDetalPersonalizada: utilDet,
       });
     } catch (e) {
