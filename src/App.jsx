@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
-  X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2
+  X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
+  Calculator, Sliders
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -32,11 +33,44 @@ const productFromDB = (r) => ({
   unit: r.unit, minStock: r.min_stock, stock: r.stock, unitValue: Number(r.unit_value),
   codCategoria: r.cod_categoria, codSegmento: r.cod_segmento, codLinea: r.cod_linea, codDiseno: r.cod_diseno,
   consecutivo: r.consecutivo, codColor: r.cod_color, codTalla: r.cod_talla, masterCode: r.master_code,
+  costoTotal: Number(r.costo_total || 0), precioMayorista: Number(r.precio_mayorista || 0), precioDetal: Number(r.precio_detal || 0),
+  utilidadMayoristaPersonalizada: r.utilidad_mayorista_personalizada != null ? Number(r.utilidad_mayorista_personalizada) : null,
+  utilidadDetalPersonalizada: r.utilidad_detal_personalizada != null ? Number(r.utilidad_detal_personalizada) : null,
 });
 const movementFromDB = (r) => ({
   id: r.id, productId: r.product_id, sku: r.sku, type: r.type, qty: r.qty, reason: r.reason, date: r.date,
 });
 const catFromDB = (r) => ({ cod: r.cod, nombre: r.nombre, tipo: r.tipo || null });
+const materialFromDB = (r) => ({ id: r.id, detalle: r.detalle, proveedor: r.proveedor, valorUnitario: Number(r.valor_unitario), cantidad: Number(r.cantidad) });
+const manoObraFromDB = (r) => ({ id: r.id, area: r.area, detalle: r.detalle, valorUnitario: Number(r.valor_unitario), cantidad: Number(r.cantidad) });
+const asuncionesFromDB = (r) => ({ cifPct: Number(r.cif_pct), margenMayoristaPct: Number(r.margen_mayorista_pct), margenDetalPct: Number(r.margen_detal_pct), ivaPct: Number(r.iva_pct) });
+
+function calcularCosteo(materiales, manoObra, asunciones, utilidadMayPersonalizada, utilidadDetPersonalizada) {
+  const materiaPrimaTotal = materiales.reduce((a, m) => a + m.valorUnitario * m.cantidad, 0);
+  const manoObraTotal = manoObra.reduce((a, m) => a + m.valorUnitario * m.cantidad, 0);
+  const costoDirecto = materiaPrimaTotal + manoObraTotal;
+  const cif = costoDirecto * (asunciones?.cifPct ?? 0);
+  const costoTotal = costoDirecto + cif;
+
+  const mMay = asunciones?.margenMayoristaPct ?? 0;
+  const mDet = asunciones?.margenDetalPct ?? 0;
+  const utilidadMaySugerida = mMay < 1 ? costoTotal * (mMay / (1 - mMay)) : 0;
+  const utilidadDetSugerida = mDet < 1 ? costoTotal * (mDet / (1 - mDet)) : 0;
+  const utilidadMay = utilidadMayPersonalizada != null ? utilidadMayPersonalizada : utilidadMaySugerida;
+  const utilidadDet = utilidadDetPersonalizada != null ? utilidadDetPersonalizada : utilidadDetSugerida;
+
+  const precioMaySinIva = costoTotal + utilidadMay;
+  const precioDetSinIva = costoTotal + utilidadDet;
+  const iva = asunciones?.ivaPct ?? 0;
+  const precioMayConIva = precioMaySinIva * (1 + iva);
+  const precioDetConIva = precioDetSinIva * (1 + iva);
+
+  return {
+    materiaPrimaTotal, manoObraTotal, costoDirecto, cif, costoTotal,
+    utilidadMaySugerida, utilidadDetSugerida, utilidadMay, utilidadDet,
+    precioMaySinIva, precioDetSinIva, precioMayConIva, precioDetConIva,
+  };
+}
 
 const CATALOG_TABLES = {
   categorias: "mopa_categorias",
@@ -57,6 +91,7 @@ const TOKENS = {
   warn: "#C4783B", warnSoft: "#FBE9D9", crit: "#C4483B", critSoft: "#FAE1DE",
 };
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');`;
+
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const fmtMoney = (n) => n.toLocaleString("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 0 });
@@ -101,6 +136,8 @@ export default function InventarioProductoTerminado() {
   const [products, setProducts] = useState([]);
   const [movements, setMovements] = useState([]);
   const [catalogs, setCatalogs] = useState({ categorias: [], segmentos: [], lineas: [], disenos: [], colores: [], tallas: [] });
+  const [asunciones, setAsunciones] = useState(null);
+  const [showAsunciones, setShowAsunciones] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
@@ -114,13 +151,15 @@ export default function InventarioProductoTerminado() {
     setLoading(true);
     setError(null);
     try {
-      const [prodRows, movRows, ...catRows] = await Promise.all([
+      const [prodRows, movRows, asuncionesRows, ...catRows] = await Promise.all([
         sb("products?select=*&order=created_at.asc", { method: "GET" }),
         sb("movements?select=*&order=created_at.desc&limit=200", { method: "GET" }),
+        sb("mopa_asunciones?select=*&id=eq.1", { method: "GET" }),
         ...Object.values(CATALOG_TABLES).map(t => sb(`${t}?select=*&order=orden.asc`, { method: "GET" })),
       ]);
       setProducts(prodRows.map(productFromDB));
       setMovements(movRows.map(movementFromDB));
+      setAsunciones(asuncionesRows[0] ? asuncionesFromDB(asuncionesRows[0]) : { cifPct: 0.03, margenMayoristaPct: 0.4, margenDetalPct: 0.6, ivaPct: 0.19 });
       const keys = Object.keys(CATALOG_TABLES);
       const newCatalogs = {};
       keys.forEach((k, i) => { newCatalogs[k] = catRows[i].map(catFromDB); });
@@ -142,9 +181,29 @@ export default function InventarioProductoTerminado() {
     });
   }, [products, search, filter]);
 
+  async function updateAsunciones(next) {
+    try {
+      await sb(`mopa_asunciones?id=eq.1`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          cif_pct: next.cifPct, margen_mayorista_pct: next.margenMayoristaPct,
+          margen_detal_pct: next.margenDetalPct, iva_pct: next.ivaPct,
+        }),
+      });
+      setAsunciones(next);
+    } catch (e) {
+      alert("No se pudo actualizar la configuración de costeo: " + e.message);
+    }
+  }
+
+  function refreshProductInList(updated) {
+    setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+    if (selected?.id === updated.id) setSelected(updated);
+  }
+
   const kpis = useMemo(() => {
     const totalUnits = products.reduce((a, p) => a + p.stock, 0);
-    const totalValue = products.reduce((a, p) => a + p.stock * p.unitValue, 0);
+    const totalValue = products.reduce((a, p) => a + p.stock * p.costoTotal, 0);
     const lowStock = products.filter(p => p.stock < p.minStock).length;
     return { skus: products.length, totalUnits, totalValue, lowStock };
   }, [products]);
@@ -174,7 +233,7 @@ export default function InventarioProductoTerminado() {
         method: "POST",
         body: JSON.stringify({
           sku, name: data.name, category: catNombre, color: colorNombre, diseno: disenoNombre,
-          unit: "pza", min_stock: data.minStock, unit_value: data.unitValue, stock: 0,
+          unit: "pza", min_stock: data.minStock, stock: 0,
           cod_categoria: data.codCategoria, cod_segmento: data.codSegmento, cod_linea: data.codLinea,
           cod_diseno: data.codDiseno, consecutivo: data.consecutivo, cod_color: data.codColor,
           cod_talla: data.codTalla, master_code: masterCode,
@@ -250,6 +309,7 @@ export default function InventarioProductoTerminado() {
         <NavItem icon={<CircleDollarSign size={16} />} label="Ventas" disabled />
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${TOKENS.border}` }}>
           <NavItem icon={<Settings2 size={16} />} label="Catálogos" onClick={() => setCatalogModalTab("categorias")} />
+          <NavItem icon={<Sliders size={16} />} label="Costeo" onClick={() => setShowAsunciones(true)} />
         </div>
       </div>
 
@@ -293,7 +353,7 @@ export default function InventarioProductoTerminado() {
 
         <div style={{ background: TOKENS.panel, border: `1px solid ${TOKENS.border}`, borderRadius: 10, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 140px", padding: "10px 16px", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, letterSpacing: 0.4, textTransform: "uppercase" }}>
-            <div>SKU</div><div>Producto</div><div>Categoría</div><div>Stock / mín.</div><div>Valor</div><div>Acciones</div>
+            <div>SKU</div><div>Producto</div><div>Categoría</div><div>Stock / mín.</div><div>Precio detal</div><div>Acciones</div>
           </div>
           {!loading && filtered.length === 0 && (
             <div style={{ padding: 32, textAlign: "center", color: TOKENS.inkSoft, fontSize: 13 }}>
@@ -311,7 +371,7 @@ export default function InventarioProductoTerminado() {
                 </div>
                 <div style={{ color: TOKENS.inkSoft, fontSize: 13 }}>{p.category}</div>
                 <StockGauge stock={p.stock} min={p.minStock} />
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{fmtMoney(p.stock * p.unitValue)}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{p.precioDetal > 0 ? fmtMoney(p.precioDetal) : "—"}</div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <button onClick={() => setMovementFor(p)} title="Registrar movimiento" style={iconBtn}><ArrowUpCircle size={15} /></button>
                   <button onClick={() => setSelected(p)} title="Ver historial" style={iconBtn}><History size={15} /></button>
@@ -322,7 +382,10 @@ export default function InventarioProductoTerminado() {
         </div>
       </div>
 
-      {selected && <DetailDrawer product={selected} movements={productMovements(selected.id)} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DetailDrawer product={selected} movements={productMovements(selected.id)} onClose={() => setSelected(null)}
+          asunciones={asunciones} onProductUpdated={refreshProductInList} />
+      )}
       {showAddProduct && (
         <AddProductModal
           catalogs={catalogs}
@@ -342,6 +405,9 @@ export default function InventarioProductoTerminado() {
           onDelete={deleteCatalogItem}
           onClose={() => setCatalogModalTab(null)}
         />
+      )}
+      {showAsunciones && asunciones && (
+        <AsuncionesModal asunciones={asunciones} onSave={updateAsunciones} onClose={() => setShowAsunciones(false)} />
       )}
     </div>
   );
@@ -410,9 +476,10 @@ function ModalCenter({ children, onClose, width = 380 }) {
   );
 }
 
-function DetailDrawer({ product, movements, onClose }) {
+function DetailDrawer({ product, movements, onClose, asunciones, onProductUpdated }) {
+  const [tab, setTab] = useState("movimientos");
   return (
-    <Overlay onClose={onClose} width={400}>
+    <Overlay onClose={onClose} width={440}>
       <div style={{ padding: 20, fontFamily: "'IBM Plex Sans', sans-serif" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TOKENS.inkSoft }}>{product.sku}</div>
@@ -425,7 +492,7 @@ function DetailDrawer({ product, movements, onClose }) {
           {product.codTalla && <span style={tagStyle}>Talla: {product.codTalla}</span>}
           {product.diseno && <span style={tagStyle}>Diseño: {product.diseno}</span>}
         </div>
-        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
           <div style={{ flex: 1, background: TOKENS.bg, borderRadius: 8, padding: 12 }}>
             <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Stock actual</div>
             <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18 }}>{product.stock}</div>
@@ -434,29 +501,277 @@ function DetailDrawer({ product, movements, onClose }) {
             <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Mínimo</div>
             <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18 }}>{product.minStock}</div>
           </div>
-        </div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 10 }}>Historial de movimientos</div>
-        {movements.length === 0 && <div style={{ color: TOKENS.inkSoft, fontSize: 13 }}>Sin movimientos registrados aún.</div>}
-        {movements.map(m => (
-          <div key={m.id} style={{ display: "flex", gap: 10, padding: "10px 0", borderBottom: `1px solid ${TOKENS.border}` }}>
-            {m.type === "entrada"
-              ? <ArrowUpCircle size={17} color={TOKENS.good} style={{ flexShrink: 0, marginTop: 1 }} />
-              : <ArrowDownCircle size={17} color={TOKENS.crit} style={{ flexShrink: 0, marginTop: 1 }} />}
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{m.reason}</div>
-              <div style={{ fontSize: 11.5, color: TOKENS.inkSoft, marginTop: 2 }}>{fmtDate(m.date)}</div>
-            </div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600, color: m.type === "entrada" ? TOKENS.good : TOKENS.crit }}>
-              {m.type === "entrada" ? "+" : "−"}{m.qty}
-            </div>
+          <div style={{ flex: 1, background: TOKENS.bg, borderRadius: 8, padding: 12 }}>
+            <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Precio detal</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15 }}>{product.precioDetal > 0 ? fmtMoney(product.precioDetal) : "—"}</div>
           </div>
-        ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, borderBottom: `1px solid ${TOKENS.border}` }}>
+          <TabBtn active={tab === "movimientos"} onClick={() => setTab("movimientos")} icon={<History size={14} />}>Movimientos</TabBtn>
+          <TabBtn active={tab === "costeo"} onClick={() => setTab("costeo")} icon={<Calculator size={14} />}>Costeo y precio</TabBtn>
+        </div>
+
+        {tab === "movimientos" && (
+          <>
+            {movements.length === 0 && <div style={{ color: TOKENS.inkSoft, fontSize: 13 }}>Sin movimientos registrados aún.</div>}
+            {movements.map(m => (
+              <div key={m.id} style={{ display: "flex", gap: 10, padding: "10px 0", borderBottom: `1px solid ${TOKENS.border}` }}>
+                {m.type === "entrada"
+                  ? <ArrowUpCircle size={17} color={TOKENS.good} style={{ flexShrink: 0, marginTop: 1 }} />
+                  : <ArrowDownCircle size={17} color={TOKENS.crit} style={{ flexShrink: 0, marginTop: 1 }} />}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{m.reason}</div>
+                  <div style={{ fontSize: 11.5, color: TOKENS.inkSoft, marginTop: 2 }}>{fmtDate(m.date)}</div>
+                </div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600, color: m.type === "entrada" ? TOKENS.good : TOKENS.crit }}>
+                  {m.type === "entrada" ? "+" : "−"}{m.qty}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {tab === "costeo" && (
+          <CostingPanel product={product} asunciones={asunciones} onProductUpdated={onProductUpdated} />
+        )}
       </div>
     </Overlay>
   );
 }
 
 const tagStyle = { background: TOKENS.bg, color: TOKENS.inkSoft, fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 4 };
+
+function TabBtn({ active, onClick, icon, children }) {
+  return (
+    <button onClick={onClick} style={{
+      display: "flex", alignItems: "center", gap: 6, padding: "8px 4px", marginBottom: -1,
+      background: "none", border: "none", borderBottom: `2px solid ${active ? TOKENS.ink : "transparent"}`,
+      color: active ? TOKENS.ink : TOKENS.inkSoft, fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit",
+    }}>{icon} {children}</button>
+  );
+}
+
+function LineItemRow({ item, fields, onDelete }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 12.5 }}>
+      {fields.map((f, i) => (
+        <div key={i} style={{ flex: f.flex || 1, color: f.muted ? TOKENS.inkSoft : TOKENS.ink, fontFamily: f.mono ? "'IBM Plex Mono', monospace" : "inherit" }}>{f.value}</div>
+      ))}
+      <button onClick={onDelete} style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft, flexShrink: 0 }}><Trash2 size={13} /></button>
+    </div>
+  );
+}
+
+function CostingPanel({ product, asunciones, onProductUpdated }) {
+  const [materiales, setMateriales] = useState([]);
+  const [manoObra, setManoObra] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [utilMay, setUtilMay] = useState(product.utilidadMayoristaPersonalizada);
+  const [utilDet, setUtilDet] = useState(product.utilidadDetalPersonalizada);
+
+  const [matForm, setMatForm] = useState({ detalle: "", proveedor: "", valorUnitario: "", cantidad: "1" });
+  const [moForm, setMoForm] = useState({ area: "", detalle: "", valorUnitario: "", cantidad: "1" });
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [matRows, moRows] = await Promise.all([
+        sb(`product_materiales?product_id=eq.${product.id}&select=*&order=created_at.asc`, { method: "GET" }),
+        sb(`product_mano_obra?product_id=eq.${product.id}&select=*&order=created_at.asc`, { method: "GET" }),
+      ]);
+      setMateriales(matRows.map(materialFromDB));
+      setManoObra(moRows.map(manoObraFromDB));
+    } catch (e) {
+      alert("No se pudo cargar el costeo: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, [product.id]);
+
+  async function addMaterial() {
+    if (!matForm.detalle.trim() || !matForm.valorUnitario) return;
+    try {
+      const [row] = await sb("product_materiales", {
+        method: "POST",
+        body: JSON.stringify({
+          product_id: product.id, detalle: matForm.detalle, proveedor: matForm.proveedor,
+          valor_unitario: Number(matForm.valorUnitario), cantidad: Number(matForm.cantidad) || 1,
+        }),
+      });
+      setMateriales(prev => [...prev, materialFromDB(row)]);
+      setMatForm({ detalle: "", proveedor: "", valorUnitario: "", cantidad: "1" });
+    } catch (e) { alert("No se pudo agregar: " + e.message); }
+  }
+  async function deleteMaterial(id) {
+    try { await sb(`product_materiales?id=eq.${id}`, { method: "DELETE" }); setMateriales(prev => prev.filter(m => m.id !== id)); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+  async function addManoObra() {
+    if (!moForm.area.trim() || !moForm.valorUnitario) return;
+    try {
+      const [row] = await sb("product_mano_obra", {
+        method: "POST",
+        body: JSON.stringify({
+          product_id: product.id, area: moForm.area, detalle: moForm.detalle,
+          valor_unitario: Number(moForm.valorUnitario), cantidad: Number(moForm.cantidad) || 1,
+        }),
+      });
+      setManoObra(prev => [...prev, manoObraFromDB(row)]);
+      setMoForm({ area: "", detalle: "", valorUnitario: "", cantidad: "1" });
+    } catch (e) { alert("No se pudo agregar: " + e.message); }
+  }
+  async function deleteManoObra(id) {
+    try { await sb(`product_mano_obra?id=eq.${id}`, { method: "DELETE" }); setManoObra(prev => prev.filter(m => m.id !== id)); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  const calc = calcularCosteo(materiales, manoObra, asunciones, utilMay, utilDet);
+
+  async function guardarCosteo() {
+    setSaving(true);
+    try {
+      const body = {
+        costo_total: calc.costoTotal, precio_mayorista: calc.precioMayConIva, precio_detal: calc.precioDetConIva,
+        utilidad_mayorista_personalizada: utilMay, utilidad_detal_personalizada: utilDet,
+      };
+      await sb(`products?id=eq.${product.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      onProductUpdated({
+        ...product, costoTotal: calc.costoTotal, precioMayorista: calc.precioMayConIva, precioDetal: calc.precioDetConIva,
+        utilidadMayoristaPersonalizada: utilMay, utilidadDetalPersonalizada: utilDet,
+      });
+    } catch (e) {
+      alert("No se pudo guardar el costeo: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando costeo...</div>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Materia prima</div>
+      {materiales.map(m => (
+        <LineItemRow key={m.id} onDelete={() => deleteMaterial(m.id)} fields={[
+          { value: m.detalle, flex: 2 },
+          { value: m.proveedor || "—", flex: 1, muted: true },
+          { value: `${m.cantidad} × ${fmtMoney(m.valorUnitario)}`, flex: 1.2, mono: true, muted: true },
+          { value: fmtMoney(m.valorUnitario * m.cantidad), flex: 1, mono: true },
+        ]} />
+      ))}
+      {materiales.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin insumos agregados.</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 18, flexWrap: "wrap" }}>
+        <input style={{ ...miniInput, flex: 2 }} placeholder="Insumo (ej. Tela cuerpo)" value={matForm.detalle} onChange={e => setMatForm(f => ({ ...f, detalle: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1 }} placeholder="Proveedor" value={matForm.proveedor} onChange={e => setMatForm(f => ({ ...f, proveedor: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" placeholder="Cant." value={matForm.cantidad} onChange={e => setMatForm(f => ({ ...f, cantidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" placeholder="V. unit." value={matForm.valorUnitario} onChange={e => setMatForm(f => ({ ...f, valorUnitario: e.target.value }))} />
+        <button onClick={addMaterial} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}><Plus size={14} /></button>
+      </div>
+
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Mano de obra</div>
+      {manoObra.map(m => (
+        <LineItemRow key={m.id} onDelete={() => deleteManoObra(m.id)} fields={[
+          { value: m.area, flex: 1, muted: true },
+          { value: m.detalle || "—", flex: 1.5 },
+          { value: `${m.cantidad} × ${fmtMoney(m.valorUnitario)}`, flex: 1.2, mono: true, muted: true },
+          { value: fmtMoney(m.valorUnitario * m.cantidad), flex: 1, mono: true },
+        ]} />
+      ))}
+      {manoObra.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin actividades agregadas.</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 18, flexWrap: "wrap" }}>
+        <input style={{ ...miniInput, flex: 1 }} placeholder="Área (ej. Corte)" value={moForm.area} onChange={e => setMoForm(f => ({ ...f, area: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1.3 }} placeholder="Detalle" value={moForm.detalle} onChange={e => setMoForm(f => ({ ...f, detalle: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" placeholder="Cant." value={moForm.cantidad} onChange={e => setMoForm(f => ({ ...f, cantidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" placeholder="V. unit." value={moForm.valorUnitario} onChange={e => setMoForm(f => ({ ...f, valorUnitario: e.target.value }))} />
+        <button onClick={addManoObra} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}><Plus size={14} /></button>
+      </div>
+
+      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+        <BreakdownRow label="Materia prima" value={calc.materiaPrimaTotal} />
+        <BreakdownRow label="Mano de obra" value={calc.manoObraTotal} />
+        <BreakdownRow label="Costo directo" value={calc.costoDirecto} />
+        <BreakdownRow label={`CIF (${(asunciones.cifPct * 100).toFixed(1)}%)`} value={calc.cif} />
+        <BreakdownRow label="Costo total" value={calc.costoTotal} bold />
+      </div>
+
+      <PriceBlock
+        label="Precio mayorista" muted={`sugerida ${(asunciones.margenMayoristaPct * 100).toFixed(0)}% margen`}
+        utilidad={utilMay} sugerida={calc.utilidadMaySugerida} onChangeUtilidad={setUtilMay}
+        sinIva={calc.precioMaySinIva} conIva={calc.precioMayConIva} ivaPct={asunciones.ivaPct}
+      />
+      <PriceBlock
+        label="Precio al detal" muted={`sugerida ${(asunciones.margenDetalPct * 100).toFixed(0)}% margen`}
+        utilidad={utilDet} sugerida={calc.utilidadDetSugerida} onChangeUtilidad={setUtilDet}
+        sinIva={calc.precioDetSinIva} conIva={calc.precioDetConIva} ivaPct={asunciones.ivaPct}
+      />
+
+      <button onClick={guardarCosteo} disabled={saving} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: saving ? 0.6 : 1 }}>
+        {saving ? <Loader2 size={14} className="spin" /> : <Calculator size={15} />} Guardar costeo
+      </button>
+    </div>
+  );
+}
+
+function BreakdownRow({ label, value, bold }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: bold ? 13.5 : 12.5, fontWeight: bold ? 700 : 400 }}>
+      <span style={{ color: bold ? TOKENS.ink : TOKENS.inkSoft }}>{label}</span>
+      <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{fmtMoney(value)}</span>
+    </div>
+  );
+}
+
+function PriceBlock({ label, muted, utilidad, sugerida, onChangeUtilidad, sinIva, conIva, ivaPct }) {
+  const value = utilidad != null ? utilidad : sugerida;
+  return (
+    <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600 }}>{label}</span>
+        <span style={{ fontSize: 10.5, color: TOKENS.inkSoft }}>{muted}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+        <span style={{ fontSize: 11.5, color: TOKENS.inkSoft, flexShrink: 0 }}>Utilidad</span>
+        <input type="number" style={{ ...miniInput, flex: 1 }} value={Math.round(value)} onChange={e => onChangeUtilidad(e.target.value === "" ? null : Number(e.target.value))} />
+        <button onClick={() => onChangeUtilidad(null)} title="Usar sugerida" style={{ fontSize: 10.5, color: TOKENS.amber, background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>usar sugerida</button>
+      </div>
+      <BreakdownRow label="Precio sin IVA" value={sinIva} />
+      <BreakdownRow label={`IVA (${(ivaPct * 100).toFixed(0)}%)`} value={conIva - sinIva} />
+      <BreakdownRow label="Precio con IVA" value={conIva} bold />
+    </div>
+  );
+}
+
+function AsuncionesModal({ asunciones, onSave, onClose }) {
+  const [form, setForm] = useState({ ...asunciones });
+  const pct = (key) => ({
+    value: Math.round(form[key] * 100),
+    onChange: (e) => setForm(f => ({ ...f, [key]: Number(e.target.value) / 100 })),
+  });
+  return (
+    <ModalCenter onClose={onClose} width={380}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Configuración de costeo</h3>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 16px" }}>Estos valores aplican como sugerencia a todos los SKU. Puedes personalizar la utilidad por producto en su costeo individual.</p>
+        <Field label="CIF — costos indirectos (% sobre costo directo)"><input type="number" style={input} {...pct("cifPct")} /></Field>
+        <Field label="Margen mayorista sugerido (% sobre precio)"><input type="number" style={input} {...pct("margenMayoristaPct")} /></Field>
+        <Field label="Margen detal sugerido (% sobre precio)"><input type="number" style={input} {...pct("margenDetalPct")} /></Field>
+        <Field label="IVA (%)"><input type="number" style={input} {...pct("ivaPct")} /></Field>
+        <button onClick={() => { onSave(form); onClose(); }} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6 }}>Guardar configuración</button>
+      </div>
+    </ModalCenter>
+  );
+}
+
+const miniInput = {
+  boxSizing: "border-box", padding: "6px 8px", borderRadius: 6, border: `1px solid ${TOKENS.border}`,
+  fontSize: 12, fontFamily: "inherit", outline: "none", background: TOKENS.panel, minWidth: 0,
+};
 
 function SkuSelect({ label, options, value, onChange, onAddNew }) {
   return (
@@ -486,7 +801,6 @@ function AddProductModal({ catalogs, onClose, onSave, suggestConsecutivo, onOpen
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [minStock, setMinStock] = useState(20);
-  const [unitValue, setUnitValue] = useState(0);
 
   const catNombre = catalogs.categorias.find(c => c.cod === codCategoria)?.nombre || "";
   const segNombre = catalogs.segmentos.find(c => c.cod === codSegmento)?.nombre || "";
@@ -548,8 +862,8 @@ function AddProductModal({ catalogs, onClose, onSave, suggestConsecutivo, onOpen
 
         <div style={{ display: "flex", gap: 10 }}>
           <Field label="Stock mínimo"><input type="number" style={input} value={minStock} onChange={e => setMinStock(e.target.value)} /></Field>
-          <Field label="Valor unitario (MXN)"><input type="number" style={input} value={unitValue} onChange={e => setUnitValue(e.target.value)} /></Field>
         </div>
+        <p style={{ fontSize: 11.5, color: TOKENS.inkSoft, margin: "-4px 0 12px" }}>El costo y precio se definen después, en la pestaña "Costeo y precio" del producto.</p>
 
         {(masterCode || skuPreview) && (
           <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
@@ -562,7 +876,7 @@ function AddProductModal({ catalogs, onClose, onSave, suggestConsecutivo, onOpen
 
         <button
           disabled={!canSave}
-          onClick={() => onSave({ codCategoria, codSegmento, codLinea, codDiseno, consecutivo: consecPadded, codColor, codTalla, name, minStock: Number(minStock), unitValue: Number(unitValue) })}
+          onClick={() => onSave({ codCategoria, codSegmento, codLinea, codDiseno, consecutivo: consecPadded, codColor, codTalla, name, minStock: Number(minStock) })}
           style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6, opacity: canSave ? 1 : 0.4 }}
         >Guardar producto</button>
       </div>
