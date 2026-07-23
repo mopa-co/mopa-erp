@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders
+  Calculator, Sliders, Pencil
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -48,8 +48,15 @@ const masterFromDB = (r) => ({
   masterCode: r.master_code, costoTotal: Number(r.costo_total || 0), precioMayorista: Number(r.precio_mayorista || 0), precioDetal: Number(r.precio_detal || 0),
   utilidadMayoristaPersonalizada: r.utilidad_mayorista_personalizada != null ? Number(r.utilidad_mayorista_personalizada) : null,
   utilidadDetalPersonalizada: r.utilidad_detal_personalizada != null ? Number(r.utilidad_detal_personalizada) : null,
+  cifPct: r.cif_pct != null ? Number(r.cif_pct) : null,
+  margenMayoristaPct: r.margen_mayorista_pct != null ? Number(r.margen_mayorista_pct) : null,
+  margenDetalPct: r.margen_detal_pct != null ? Number(r.margen_detal_pct) : null,
+  ivaPct: r.iva_pct != null ? Number(r.iva_pct) : null,
 });
-const EMPTY_MASTER = { costoTotal: 0, precioMayorista: 0, precioDetal: 0, utilidadMayoristaPersonalizada: null, utilidadDetalPersonalizada: null };
+const EMPTY_MASTER = {
+  costoTotal: 0, precioMayorista: 0, precioDetal: 0, utilidadMayoristaPersonalizada: null, utilidadDetalPersonalizada: null,
+  cifPct: null, margenMayoristaPct: null, margenDetalPct: null, ivaPct: null,
+};
 
 async function saveMaster(masterCode, fields) {
   const [row] = await sb(`product_masters?on_conflict=master_code`, {
@@ -579,13 +586,14 @@ function TabBtn({ active, onClick, icon, children }) {
   );
 }
 
-function LineItemRow({ item, fields, onDelete }) {
+function LineItemRow({ item, fields, onDelete, onEdit }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 12.5 }}>
       {fields.map((f, i) => (
         <div key={i} style={{ flex: f.flex || 1, color: f.muted ? TOKENS.inkSoft : TOKENS.ink, fontFamily: f.mono ? "'IBM Plex Mono', monospace" : "inherit" }}>{f.value}</div>
       ))}
-      <button onClick={onDelete} style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft, flexShrink: 0 }}><Trash2 size={13} /></button>
+      <button onClick={onEdit} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft, flexShrink: 0 }}><Pencil size={13} /></button>
+      <button onClick={onDelete} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft, flexShrink: 0 }}><Trash2 size={13} /></button>
     </div>
   );
 }
@@ -597,9 +605,15 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
   const [saving, setSaving] = useState(false);
   const [utilMay, setUtilMay] = useState(masterData.utilidadMayoristaPersonalizada);
   const [utilDet, setUtilDet] = useState(masterData.utilidadDetalPersonalizada);
+  const [cifPct, setCifPct] = useState(masterData.cifPct);
+  const [margenMayoristaPct, setMargenMayoristaPct] = useState(masterData.margenMayoristaPct);
+  const [margenDetalPct, setMargenDetalPct] = useState(masterData.margenDetalPct);
+  const [ivaPct, setIvaPct] = useState(masterData.ivaPct);
 
   const [matForm, setMatForm] = useState({ detalle: "", proveedor: "", valorUnitario: "", cantidad: "1" });
   const [moForm, setMoForm] = useState({ area: "", detalle: "", valorUnitario: "", cantidad: "1" });
+  const [editingMatId, setEditingMatId] = useState(null);
+  const [editingMoId, setEditingMoId] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -618,44 +632,73 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
   }
   useEffect(() => { load(); }, [masterCode]);
 
-  async function addMaterial() {
-    if (!matForm.detalle.trim() || !matForm.valorUnitario) return;
+  function startEditMaterial(m) {
+    setEditingMatId(m.id);
+    setMatForm({ detalle: m.detalle, proveedor: m.proveedor || "", valorUnitario: String(m.valorUnitario), cantidad: String(m.cantidad) });
+  }
+  function cancelEditMaterial() {
+    setEditingMatId(null);
+    setMatForm({ detalle: "", proveedor: "", valorUnitario: "", cantidad: "1" });
+  }
+  async function submitMaterial() {
+    if (!matForm.detalle.trim() || matForm.valorUnitario === "") return;
+    const body = {
+      master_code: masterCode, detalle: matForm.detalle, proveedor: matForm.proveedor,
+      valor_unitario: Number(matForm.valorUnitario), cantidad: Number(matForm.cantidad) || 1,
+    };
     try {
-      const [row] = await sb("product_materiales", {
-        method: "POST",
-        body: JSON.stringify({
-          master_code: masterCode, detalle: matForm.detalle, proveedor: matForm.proveedor,
-          valor_unitario: Number(matForm.valorUnitario), cantidad: Number(matForm.cantidad) || 1,
-        }),
-      });
-      setMateriales(prev => [...prev, materialFromDB(row)]);
-      setMatForm({ detalle: "", proveedor: "", valorUnitario: "", cantidad: "1" });
-    } catch (e) { alert("No se pudo agregar: " + e.message); }
+      if (editingMatId) {
+        const [row] = await sb(`product_materiales?id=eq.${editingMatId}`, { method: "PATCH", body: JSON.stringify(body) });
+        setMateriales(prev => prev.map(m => m.id === editingMatId ? materialFromDB(row) : m));
+      } else {
+        const [row] = await sb("product_materiales", { method: "POST", body: JSON.stringify(body) });
+        setMateriales(prev => [...prev, materialFromDB(row)]);
+      }
+      cancelEditMaterial();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
   }
   async function deleteMaterial(id) {
-    try { await sb(`product_materiales?id=eq.${id}`, { method: "DELETE" }); setMateriales(prev => prev.filter(m => m.id !== id)); }
-    catch (e) { alert("No se pudo eliminar: " + e.message); }
-  }
-  async function addManoObra() {
-    if (!moForm.area.trim() || !moForm.valorUnitario) return;
-    try {
-      const [row] = await sb("product_mano_obra", {
-        method: "POST",
-        body: JSON.stringify({
-          master_code: masterCode, area: moForm.area, detalle: moForm.detalle,
-          valor_unitario: Number(moForm.valorUnitario), cantidad: Number(moForm.cantidad) || 1,
-        }),
-      });
-      setManoObra(prev => [...prev, manoObraFromDB(row)]);
-      setMoForm({ area: "", detalle: "", valorUnitario: "", cantidad: "1" });
-    } catch (e) { alert("No se pudo agregar: " + e.message); }
-  }
-  async function deleteManoObra(id) {
-    try { await sb(`product_mano_obra?id=eq.${id}`, { method: "DELETE" }); setManoObra(prev => prev.filter(m => m.id !== id)); }
+    try { await sb(`product_materiales?id=eq.${id}`, { method: "DELETE" }); setMateriales(prev => prev.filter(m => m.id !== id)); if (editingMatId === id) cancelEditMaterial(); }
     catch (e) { alert("No se pudo eliminar: " + e.message); }
   }
 
-  const calc = calcularCosteo(materiales, manoObra, asunciones, utilMay, utilDet);
+  function startEditManoObra(m) {
+    setEditingMoId(m.id);
+    setMoForm({ area: m.area, detalle: m.detalle || "", valorUnitario: String(m.valorUnitario), cantidad: String(m.cantidad) });
+  }
+  function cancelEditManoObra() {
+    setEditingMoId(null);
+    setMoForm({ area: "", detalle: "", valorUnitario: "", cantidad: "1" });
+  }
+  async function submitManoObra() {
+    if (!moForm.area.trim() || moForm.valorUnitario === "") return;
+    const body = {
+      master_code: masterCode, area: moForm.area, detalle: moForm.detalle,
+      valor_unitario: Number(moForm.valorUnitario), cantidad: Number(moForm.cantidad) || 1,
+    };
+    try {
+      if (editingMoId) {
+        const [row] = await sb(`product_mano_obra?id=eq.${editingMoId}`, { method: "PATCH", body: JSON.stringify(body) });
+        setManoObra(prev => prev.map(m => m.id === editingMoId ? manoObraFromDB(row) : m));
+      } else {
+        const [row] = await sb("product_mano_obra", { method: "POST", body: JSON.stringify(body) });
+        setManoObra(prev => [...prev, manoObraFromDB(row)]);
+      }
+      cancelEditManoObra();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+  }
+  async function deleteManoObra(id) {
+    try { await sb(`product_mano_obra?id=eq.${id}`, { method: "DELETE" }); setManoObra(prev => prev.filter(m => m.id !== id)); if (editingMoId === id) cancelEditManoObra(); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  const asuncionesEfectivas = {
+    cifPct: cifPct != null ? cifPct : asunciones.cifPct,
+    margenMayoristaPct: margenMayoristaPct != null ? margenMayoristaPct : asunciones.margenMayoristaPct,
+    margenDetalPct: margenDetalPct != null ? margenDetalPct : asunciones.margenDetalPct,
+    ivaPct: ivaPct != null ? ivaPct : asunciones.ivaPct,
+  };
+  const calc = calcularCosteo(materiales, manoObra, asuncionesEfectivas, utilMay, utilDet);
 
   async function guardarCosteo() {
     setSaving(true);
@@ -663,11 +706,13 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
       const body = {
         costo_total: calc.costoTotal, precio_mayorista: calc.precioMayConIva, precio_detal: calc.precioDetConIva,
         utilidad_mayorista_personalizada: utilMay, utilidad_detal_personalizada: utilDet,
+        cif_pct: cifPct, margen_mayorista_pct: margenMayoristaPct, margen_detal_pct: margenDetalPct, iva_pct: ivaPct,
       };
       await saveMaster(masterCode, body);
       onMasterUpdated(masterCode, {
         costoTotal: calc.costoTotal, precioMayorista: calc.precioMayConIva, precioDetal: calc.precioDetConIva,
         utilidadMayoristaPersonalizada: utilMay, utilidadDetalPersonalizada: utilDet,
+        cifPct, margenMayoristaPct, margenDetalPct, ivaPct,
       });
     } catch (e) {
       alert("No se pudo guardar el costeo: " + e.message);
@@ -682,7 +727,7 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
     <div>
       <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Materia prima</div>
       {materiales.map(m => (
-        <LineItemRow key={m.id} onDelete={() => deleteMaterial(m.id)} fields={[
+        <LineItemRow key={m.id} onDelete={() => deleteMaterial(m.id)} onEdit={() => startEditMaterial(m)} fields={[
           { value: m.detalle, flex: 2 },
           { value: m.proveedor || "—", flex: 1, muted: true },
           { value: `${m.cantidad} × ${fmtMoney(m.valorUnitario)}`, flex: 1.2, mono: true, muted: true },
@@ -690,17 +735,19 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
         ]} />
       ))}
       {materiales.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin insumos agregados.</div>}
+      {editingMatId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando insumo...</div>}
       <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 18, flexWrap: "wrap" }}>
         <input style={{ ...miniInput, flex: 2 }} placeholder="Insumo (ej. Tela cuerpo)" value={matForm.detalle} onChange={e => setMatForm(f => ({ ...f, detalle: e.target.value }))} />
         <input style={{ ...miniInput, flex: 1 }} placeholder="Proveedor" value={matForm.proveedor} onChange={e => setMatForm(f => ({ ...f, proveedor: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" placeholder="Cant." value={matForm.cantidad} onChange={e => setMatForm(f => ({ ...f, cantidad: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" placeholder="V. unit." value={matForm.valorUnitario} onChange={e => setMatForm(f => ({ ...f, valorUnitario: e.target.value }))} />
-        <button onClick={addMaterial} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}><Plus size={14} /></button>
+        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" step="any" min="0" placeholder="Cant." value={matForm.cantidad} onChange={e => setMatForm(f => ({ ...f, cantidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" step="any" min="0" placeholder="V. unit." value={matForm.valorUnitario} onChange={e => setMatForm(f => ({ ...f, valorUnitario: e.target.value }))} />
+        <button onClick={submitMaterial} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingMatId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingMatId && <button onClick={cancelEditMaterial} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
       </div>
 
       <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Mano de obra</div>
       {manoObra.map(m => (
-        <LineItemRow key={m.id} onDelete={() => deleteManoObra(m.id)} fields={[
+        <LineItemRow key={m.id} onDelete={() => deleteManoObra(m.id)} onEdit={() => startEditManoObra(m)} fields={[
           { value: m.area, flex: 1, muted: true },
           { value: m.detalle || "—", flex: 1.5 },
           { value: `${m.cantidad} × ${fmtMoney(m.valorUnitario)}`, flex: 1.2, mono: true, muted: true },
@@ -708,36 +755,65 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
         ]} />
       ))}
       {manoObra.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin actividades agregadas.</div>}
+      {editingMoId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando actividad...</div>}
       <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 18, flexWrap: "wrap" }}>
         <input style={{ ...miniInput, flex: 1 }} placeholder="Área (ej. Corte)" value={moForm.area} onChange={e => setMoForm(f => ({ ...f, area: e.target.value }))} />
         <input style={{ ...miniInput, flex: 1.3 }} placeholder="Detalle" value={moForm.detalle} onChange={e => setMoForm(f => ({ ...f, detalle: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" placeholder="Cant." value={moForm.cantidad} onChange={e => setMoForm(f => ({ ...f, cantidad: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" placeholder="V. unit." value={moForm.valorUnitario} onChange={e => setMoForm(f => ({ ...f, valorUnitario: e.target.value }))} />
-        <button onClick={addManoObra} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}><Plus size={14} /></button>
+        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" step="any" min="0" placeholder="Cant." value={moForm.cantidad} onChange={e => setMoForm(f => ({ ...f, cantidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" step="any" min="0" placeholder="V. unit." value={moForm.valorUnitario} onChange={e => setMoForm(f => ({ ...f, valorUnitario: e.target.value }))} />
+        <button onClick={submitManoObra} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingMoId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingMoId && <button onClick={cancelEditManoObra} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
+      </div>
+
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Supuestos de esta referencia</div>
+      <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+        <AsuncionField label="CIF (% sobre costo directo)" value={cifPct} globalValue={asunciones.cifPct} onChange={setCifPct} />
+        <AsuncionField label="Margen mayorista (% sobre precio)" value={margenMayoristaPct} globalValue={asunciones.margenMayoristaPct} onChange={setMargenMayoristaPct} />
+        <AsuncionField label="Margen detal (% sobre precio)" value={margenDetalPct} globalValue={asunciones.margenDetalPct} onChange={setMargenDetalPct} />
+        <AsuncionField label="IVA (%)" value={ivaPct} globalValue={asunciones.ivaPct} onChange={setIvaPct} last />
       </div>
 
       <div style={{ background: TOKENS.bg, borderRadius: 8, padding: 14, marginBottom: 14 }}>
         <BreakdownRow label="Materia prima" value={calc.materiaPrimaTotal} />
         <BreakdownRow label="Mano de obra" value={calc.manoObraTotal} />
         <BreakdownRow label="Costo directo" value={calc.costoDirecto} />
-        <BreakdownRow label={`CIF (${(asunciones.cifPct * 100).toFixed(1)}%)`} value={calc.cif} />
+        <BreakdownRow label={`CIF (${(asuncionesEfectivas.cifPct * 100).toFixed(1)}%)`} value={calc.cif} />
         <BreakdownRow label="Costo total" value={calc.costoTotal} bold />
       </div>
 
       <PriceBlock
-        label="Precio mayorista" muted={`sugerida ${(asunciones.margenMayoristaPct * 100).toFixed(0)}% margen`}
+        label="Precio mayorista" muted={`sugerida ${(asuncionesEfectivas.margenMayoristaPct * 100).toFixed(0)}% margen`}
         utilidad={utilMay} sugerida={calc.utilidadMaySugerida} onChangeUtilidad={setUtilMay}
-        sinIva={calc.precioMaySinIva} conIva={calc.precioMayConIva} ivaPct={asunciones.ivaPct}
+        sinIva={calc.precioMaySinIva} conIva={calc.precioMayConIva} ivaPct={asuncionesEfectivas.ivaPct}
       />
       <PriceBlock
-        label="Precio al detal" muted={`sugerida ${(asunciones.margenDetalPct * 100).toFixed(0)}% margen`}
+        label="Precio al detal" muted={`sugerida ${(asuncionesEfectivas.margenDetalPct * 100).toFixed(0)}% margen`}
         utilidad={utilDet} sugerida={calc.utilidadDetSugerida} onChangeUtilidad={setUtilDet}
-        sinIva={calc.precioDetSinIva} conIva={calc.precioDetConIva} ivaPct={asunciones.ivaPct}
+        sinIva={calc.precioDetSinIva} conIva={calc.precioDetConIva} ivaPct={asuncionesEfectivas.ivaPct}
       />
 
       <button onClick={guardarCosteo} disabled={saving} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: saving ? 0.6 : 1 }}>
         {saving ? <Loader2 size={14} className="spin" /> : <Calculator size={15} />} Guardar costeo
       </button>
+    </div>
+  );
+}
+
+function AsuncionField({ label, value, globalValue, onChange, last }) {
+  const isCustom = value != null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: last ? "none" : `1px solid ${TOKENS.border}` }}>
+      <span style={{ fontSize: 11.5, color: TOKENS.inkSoft, flex: 1 }}>{label}</span>
+      <input
+        type="number" step="any"
+        style={{ ...miniInput, width: 64, textAlign: "right", borderColor: isCustom ? TOKENS.amber : TOKENS.border }}
+        value={isCustom ? Math.round(value * 100 * 100) / 100 : Math.round(globalValue * 100 * 100) / 100}
+        onChange={e => onChange(e.target.value === "" ? null : Number(e.target.value) / 100)}
+      />
+      <span style={{ fontSize: 11.5, color: TOKENS.inkSoft, width: 10 }}>%</span>
+      {isCustom
+        ? <button onClick={() => onChange(null)} style={{ fontSize: 10, color: TOKENS.amber, background: "none", border: "none", cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>usar global</button>
+        : <span style={{ fontSize: 10, color: TOKENS.inkSoft, flexShrink: 0, whiteSpace: "nowrap" }}>(global)</span>}
     </div>
   );
 }
