@@ -4,19 +4,23 @@ import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
 const SUPABASE_URL = "https://sqohaorxfgyzrprybaea.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNxb2hhb3J4Zmd5enJwcnliYWVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MTEwOTQsImV4cCI6MjEwMDA4NzA5NH0.8CtlUfU5KNAV8SS6qEE9Ip-53CaMUyzXSUycjMqYIXg";
+const SESSION_KEY = "mopa_session";
+
+// Token del usuario logueado (se actualiza al iniciar/cerrar sesión). Mientras no haya sesión, se usa la llave anónima.
+let currentAccessToken = null;
 
 async function sb(path, options = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...options,
     headers: {
       apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      Authorization: `Bearer ${currentAccessToken || SUPABASE_ANON_KEY}`,
       "Content-Type": "application/json",
       Prefer: "return=representation",
       ...(options.headers || {}),
@@ -28,6 +32,27 @@ async function sb(path, options = {}) {
   }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+}
+
+async function signIn(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || "Correo o contraseña incorrectos.");
+  return data; // { access_token, refresh_token, user }
+}
+
+function loadStoredSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (s?.access_token) { currentAccessToken = s.access_token; return s; }
+    return null;
+  } catch { return null; }
 }
 
 const productFromDB = (r) => ({
@@ -169,7 +194,7 @@ function Badge({ children, tone = "good" }) {
   );
 }
 
-export default function InventarioProductoTerminado() {
+function InventarioProductoTerminado({ userEmail, onLogout }) {
   const [products, setProducts] = useState([]);
   const [movements, setMovements] = useState([]);
   const [catalogs, setCatalogs] = useState({ categorias: [], segmentos: [], lineas: [], disenos: [], colores: [], tallas: [] });
@@ -466,7 +491,7 @@ export default function InventarioProductoTerminado() {
     <div style={{ fontFamily: "'IBM Plex Sans', sans-serif", background: TOKENS.bg, color: TOKENS.ink, minHeight: "100%", display: "flex", fontSize: 14 }}>
       <style>{FONT_IMPORT}{`.spin { animation: spin 0.8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      <div style={{ width: 200, background: TOKENS.panel, borderRight: `1px solid ${TOKENS.border}`, padding: "20px 14px", flexShrink: 0 }}>
+      <div style={{ width: 200, background: TOKENS.panel, borderRight: `1px solid ${TOKENS.border}`, padding: "20px 14px", flexShrink: 0, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 28, paddingLeft: 4 }}>
           <div style={{ width: 26, height: 26, background: TOKENS.ink, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Boxes size={15} color={TOKENS.bg} />
@@ -481,6 +506,10 @@ export default function InventarioProductoTerminado() {
           <NavItem icon={<Warehouse size={16} />} label="Bodegas" onClick={() => setShowBodegas(true)} />
           <NavItem icon={<Settings2 size={16} />} label="Catálogos" onClick={() => setCatalogModalTab("categorias")} />
           <NavItem icon={<Sliders size={16} />} label="Costeo" onClick={() => setShowAsunciones(true)} />
+        </div>
+        <div style={{ marginTop: "auto", paddingTop: 16 }}>
+          <div style={{ fontSize: 11, color: TOKENS.inkSoft, padding: "0 10px", marginBottom: 6, wordBreak: "break-all" }}>{userEmail}</div>
+          <NavItem icon={<LogOut size={16} />} label="Cerrar sesión" onClick={onLogout} />
         </div>
       </div>
 
@@ -1566,3 +1595,79 @@ const toggleBtn = {
 };
 const toggleActiveGood = { background: TOKENS.goodSoft, color: TOKENS.good, borderColor: TOKENS.good };
 const toggleActiveCrit = { background: TOKENS.critSoft, color: TOKENS.crit, borderColor: TOKENS.crit };
+
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await signIn(email.trim(), password);
+      onLogin(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{
+      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      background: TOKENS.bg, fontFamily: "'IBM Plex Sans', sans-serif",
+    }}>
+      <style>{FONT_IMPORT}</style>
+      <form onSubmit={submit} style={{ width: 340, background: TOKENS.panel, border: `1px solid ${TOKENS.border}`, borderRadius: 14, padding: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 22 }}>
+          <div style={{ width: 30, height: 30, background: TOKENS.ink, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Boxes size={16} color={TOKENS.bg} />
+          </div>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17 }}>MOPA</span>
+        </div>
+        <h1 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 17, margin: "0 0 4px" }}>Iniciar sesión</h1>
+        <p style={{ fontSize: 12.5, color: TOKENS.inkSoft, margin: "0 0 20px" }}>Ingresa tus credenciales para acceder al inventario.</p>
+
+        {error && (
+          <div style={{ background: TOKENS.critSoft, color: TOKENS.crit, fontSize: 12.5, padding: "8px 10px", borderRadius: 7, marginBottom: 14 }}>{error}</div>
+        )}
+
+        <Field label="Correo">
+          <input type="email" required style={input} value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@correo.com" autoComplete="username" />
+        </Field>
+        <Field label="Contraseña">
+          <input type="password" required style={input} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
+        </Field>
+        <button type="submit" disabled={loading} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6, opacity: loading ? 0.6 : 1 }}>
+          {loading ? <Loader2 size={15} className="spin" /> : null} {loading ? "Verificando..." : "Entrar"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(() => loadStoredSession());
+
+  function handleLogin(data) {
+    currentAccessToken = data.access_token;
+    const s = { access_token: data.access_token, refresh_token: data.refresh_token, email: data.user?.email };
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch {}
+    setSession(s);
+  }
+
+  function handleLogout() {
+    currentAccessToken = null;
+    try { localStorage.removeItem(SESSION_KEY); } catch {}
+    setSession(null);
+  }
+
+  if (!session) return <LoginScreen onLogin={handleLogin} />;
+  return <InventarioProductoTerminado userEmail={session.email} onLogout={handleLogout} />;
+}
+
