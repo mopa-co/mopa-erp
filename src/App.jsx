@@ -764,6 +764,7 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
   }
   async function submitMaterial() {
     if (!matForm.detalle.trim() || matForm.valorUnitario === "") return;
+    if (editingMatId && !window.confirm(`¿Guardar los cambios en "${matForm.detalle}"?`)) return;
     const body = {
       master_code: masterCode, detalle: matForm.detalle, proveedor: matForm.proveedor,
       valor_unitario: Number(matForm.valorUnitario), cantidad: Number(matForm.cantidad) || 1,
@@ -779,7 +780,8 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
       cancelEditMaterial();
     } catch (e) { alert("No se pudo guardar: " + e.message); }
   }
-  async function deleteMaterial(id) {
+  async function deleteMaterial(id, detalle) {
+    if (!window.confirm(`¿Eliminar el insumo "${detalle}"? Esta acción no se puede deshacer.`)) return;
     try { await sb(`product_materiales?id=eq.${id}`, { method: "DELETE" }); setMateriales(prev => prev.filter(m => m.id !== id)); if (editingMatId === id) cancelEditMaterial(); }
     catch (e) { alert("No se pudo eliminar: " + e.message); }
   }
@@ -794,6 +796,7 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
   }
   async function submitManoObra() {
     if (!moForm.area.trim() || moForm.valorUnitario === "") return;
+    if (editingMoId && !window.confirm(`¿Guardar los cambios en "${moForm.area}"?`)) return;
     const body = {
       master_code: masterCode, area: moForm.area, detalle: moForm.detalle,
       valor_unitario: Number(moForm.valorUnitario), cantidad: Number(moForm.cantidad) || 1,
@@ -809,7 +812,8 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
       cancelEditManoObra();
     } catch (e) { alert("No se pudo guardar: " + e.message); }
   }
-  async function deleteManoObra(id) {
+  async function deleteManoObra(id, area) {
+    if (!window.confirm(`¿Eliminar la actividad "${area}"? Esta acción no se puede deshacer.`)) return;
     try { await sb(`product_mano_obra?id=eq.${id}`, { method: "DELETE" }); setManoObra(prev => prev.filter(m => m.id !== id)); if (editingMoId === id) cancelEditManoObra(); }
     catch (e) { alert("No se pudo eliminar: " + e.message); }
   }
@@ -849,7 +853,7 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
     <div>
       <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Materia prima</div>
       {materiales.map(m => (
-        <LineItemRow key={m.id} onDelete={() => deleteMaterial(m.id)} onEdit={() => startEditMaterial(m)} fields={[
+        <LineItemRow key={m.id} onDelete={() => deleteMaterial(m.id, m.detalle)} onEdit={() => startEditMaterial(m)} fields={[
           { value: m.detalle, flex: 2 },
           { value: m.proveedor || "—", flex: 1, muted: true },
           { value: `${m.cantidad} × ${fmtMoney(m.valorUnitario)}`, flex: 1.2, mono: true, muted: true },
@@ -869,7 +873,7 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
 
       <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Mano de obra</div>
       {manoObra.map(m => (
-        <LineItemRow key={m.id} onDelete={() => deleteManoObra(m.id)} onEdit={() => startEditManoObra(m)} fields={[
+        <LineItemRow key={m.id} onDelete={() => deleteManoObra(m.id, m.area)} onEdit={() => startEditManoObra(m)} fields={[
           { value: m.area, flex: 1, muted: true },
           { value: m.detalle || "—", flex: 1.5 },
           { value: `${m.cantidad} × ${fmtMoney(m.valorUnitario)}`, flex: 1.2, mono: true, muted: true },
@@ -904,14 +908,14 @@ function CostingPanel({ masterCode, masterData, asunciones, onMasterUpdated }) {
       </div>
 
       <PriceBlock
-        label="Precio mayorista" muted={`sugerida ${(asuncionesEfectivas.margenMayoristaPct * 100).toFixed(0)}% margen`}
+        label="Precio mayorista"
         utilidad={utilMay} sugerida={calc.utilidadMaySugerida} onChangeUtilidad={setUtilMay}
-        sinIva={calc.precioMaySinIva} conIva={calc.precioMayConIva} ivaPct={asuncionesEfectivas.ivaPct}
+        sinIva={calc.precioMaySinIva} conIva={calc.precioMayConIva} ivaPct={asuncionesEfectivas.ivaPct} costoTotal={calc.costoTotal}
       />
       <PriceBlock
-        label="Precio al detal" muted={`sugerida ${(asuncionesEfectivas.margenDetalPct * 100).toFixed(0)}% margen`}
+        label="Precio al detal"
         utilidad={utilDet} sugerida={calc.utilidadDetSugerida} onChangeUtilidad={setUtilDet}
-        sinIva={calc.precioDetSinIva} conIva={calc.precioDetConIva} ivaPct={asuncionesEfectivas.ivaPct}
+        sinIva={calc.precioDetSinIva} conIva={calc.precioDetConIva} ivaPct={asuncionesEfectivas.ivaPct} costoTotal={calc.costoTotal}
       />
 
       <button onClick={guardarCosteo} disabled={saving} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: saving ? 0.6 : 1 }}>
@@ -949,17 +953,29 @@ function BreakdownRow({ label, value, bold }) {
   );
 }
 
-function PriceBlock({ label, muted, utilidad, sugerida, onChangeUtilidad, sinIva, conIva, ivaPct }) {
+function PriceBlock({ label, utilidad, sugerida, onChangeUtilidad, sinIva, conIva, ivaPct, costoTotal }) {
   const value = utilidad != null ? utilidad : sugerida;
+  const marginPct = sinIva > 0 ? (value / sinIva) * 100 : 0;
   return (
     <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <span style={{ fontSize: 12.5, fontWeight: 600 }}>{label}</span>
-        <span style={{ fontSize: 10.5, color: TOKENS.inkSoft }}>{muted}</span>
+        <span style={{ fontSize: 10.5, color: TOKENS.inkSoft, fontFamily: "'IBM Plex Mono', monospace" }}>{marginPct.toFixed(1)}% margen</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+        <span style={{ fontSize: 11.5, color: TOKENS.inkSoft, flexShrink: 0, width: 92 }}>Utilidad</span>
+        <input type="number" style={{ ...miniInput, flex: 1 }} value={Math.round(value)} onChange={e => onChangeUtilidad(e.target.value === "" ? null : Number(e.target.value))} />
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-        <span style={{ fontSize: 11.5, color: TOKENS.inkSoft, flexShrink: 0 }}>Utilidad</span>
-        <input type="number" style={{ ...miniInput, flex: 1 }} value={Math.round(value)} onChange={e => onChangeUtilidad(e.target.value === "" ? null : Number(e.target.value))} />
+        <span style={{ fontSize: 11.5, color: TOKENS.inkSoft, flexShrink: 0, width: 92 }}>Precio de venta</span>
+        <input
+          type="number" style={{ ...miniInput, flex: 1 }}
+          value={Math.round(sinIva)}
+          onChange={e => {
+            const nuevoPrecio = e.target.value === "" ? costoTotal : Number(e.target.value);
+            onChangeUtilidad(nuevoPrecio - costoTotal);
+          }}
+        />
         <button onClick={() => onChangeUtilidad(null)} title="Usar sugerida" style={{ fontSize: 10.5, color: TOKENS.amber, background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>usar sugerida</button>
       </div>
       <BreakdownRow label="Precio sin IVA" value={sinIva} />
