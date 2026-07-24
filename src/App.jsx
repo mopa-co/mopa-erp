@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from "react";
+import * as XLSX from "xlsx";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -269,6 +270,44 @@ export default function InventarioProductoTerminado() {
     return { stock: e?.stock || 0, objetivo: e?.stockObjetivo || 0 };
   }
 
+  function exportInventoryExcel() {
+    const bodegasToExport = selectedBodegaId === "ALL" ? bodegas : bodegas.filter(b => b.id === selectedBodegaId);
+    if (bodegasToExport.length === 0) { alert("No hay bodegas para exportar."); return; }
+    const wb = XLSX.utils.book_new();
+    const usedNames = new Set();
+    bodegasToExport.forEach(b => {
+      const rows = products.map(p => {
+        const e = bodegaStock[bsKey(b.id, p.id)];
+        const stock = e?.stock || 0;
+        const objetivo = e?.stockObjetivo || 0;
+        const master = masters[p.masterCode] || EMPTY_MASTER;
+        return {
+          SKU: p.sku,
+          "Código maestro": p.masterCode,
+          Producto: p.name,
+          Categoría: p.category,
+          Color: p.color,
+          Talla: p.codTalla,
+          Stock: stock,
+          "Curva objetivo": objetivo,
+          Estado: objetivo > 0 && stock < objetivo ? "Bajo curva" : "OK",
+          "Costo unitario": Math.round(master.costoTotal),
+          "Precio detal": Math.round(master.precioDetal),
+          "Valor inventario (costo)": Math.round(stock * master.costoTotal),
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 20 }, { wch: 18 }, { wch: 30 }, { wch: 14 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 13 }, { wch: 13 }, { wch: 20 }];
+      let sheetName = (b.nombre || "Bodega").replace(/[\\/?*[\]:]/g, "").substring(0, 31) || "Bodega";
+      let unique = sheetName, i = 2;
+      while (usedNames.has(unique)) { unique = `${sheetName.substring(0, 28)}_${i++}`; }
+      usedNames.add(unique);
+      XLSX.utils.book_append_sheet(wb, ws, unique);
+    });
+    const suffix = selectedBodegaId === "ALL" ? "todas_bodegas" : (bodegasToExport[0]?.nombre || "bodega").replace(/\s+/g, "_");
+    XLSX.writeFile(wb, `Inventario_MOPA_${suffix}_${todayISO()}.xlsx`);
+  }
+
   const kpis = useMemo(() => {
     let totalUnits = 0, totalValue = 0, lowStock = 0;
     products.forEach(p => {
@@ -447,6 +486,9 @@ export default function InventarioProductoTerminado() {
               <option value="ALL">Todas las bodegas</option>
               {bodegas.map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
             </select>
+            <button onClick={exportInventoryExcel} title="Descargar informe de inventario en Excel" style={{ ...btnPrimary, background: TOKENS.panel, color: TOKENS.ink, border: `1px solid ${TOKENS.border}` }}>
+              <Download size={15} /> Excel
+            </button>
             <button onClick={() => setShowAddProduct(true)} style={btnPrimary}>
               <Plus size={15} /> Nuevo producto
             </button>
