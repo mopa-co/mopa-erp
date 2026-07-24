@@ -360,6 +360,13 @@ export default function InventarioProductoTerminado() {
       setBodegas(prev => prev.map(b => b.id === bodega.id ? { ...b, activa: !b.activa } : b));
     } catch (e) { alert("No se pudo actualizar la bodega: " + e.message); }
   }
+  async function updateBodega(bodegaId, fields) {
+    try {
+      const [row] = await sb(`bodegas?id=eq.${bodegaId}`, { method: "PATCH", body: JSON.stringify(fields) });
+      const updated = bodegaFromDB(row);
+      setBodegas(prev => prev.map(b => b.id === bodegaId ? updated : b));
+    } catch (e) { alert("No se pudo actualizar la bodega: " + e.message); }
+  }
 
   async function saveCurva(bodegaId, entries) {
     // entries: [{ productId, objetivo }]
@@ -537,7 +544,7 @@ export default function InventarioProductoTerminado() {
         <AsuncionesModal asunciones={asunciones} onSave={updateAsunciones} onClose={() => setShowAsunciones(false)} />
       )}
       {showBodegas && (
-        <BodegasModal bodegas={bodegas} onAdd={addBodega} onToggle={toggleBodegaActiva} onClose={() => setShowBodegas(false)} />
+        <BodegasModal bodegas={bodegas} onAdd={addBodega} onToggle={toggleBodegaActiva} onUpdate={updateBodega} onClose={() => setShowBodegas(false)} />
       )}
       {curvaFor && (
         <CurvaModal
@@ -1039,14 +1046,33 @@ function EditProductModal({ product, onSave, onClose }) {
   );
 }
 
-function BodegasModal({ bodegas, onAdd, onToggle, onClose }) {
+function BodegasModal({ bodegas, onAdd, onToggle, onUpdate, onClose }) {
   const [nombre, setNombre] = useState("");
   const [ubicacion, setUbicacion] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editNombre, setEditNombre] = useState("");
+  const [editUbicacion, setEditUbicacion] = useState("");
+
   function submit() {
     if (!nombre.trim()) return;
     onAdd({ nombre, ubicacion });
     setNombre(""); setUbicacion("");
   }
+  function startEdit(b) {
+    setEditingId(b.id);
+    setEditNombre(b.nombre);
+    setEditUbicacion(b.ubicacion || "");
+  }
+  function cancelEdit() {
+    setEditingId(null);
+  }
+  function saveEdit(id) {
+    if (!editNombre.trim()) return;
+    if (!window.confirm(`¿Guardar los cambios de esta bodega?`)) return;
+    onUpdate(id, { nombre: editNombre.trim(), ubicacion: editUbicacion });
+    setEditingId(null);
+  }
+
   return (
     <ModalCenter onClose={onClose} width={420}>
       <div style={{ padding: 20 }}>
@@ -1056,20 +1082,34 @@ function BodegasModal({ bodegas, onAdd, onToggle, onClose }) {
         </div>
         <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 16px" }}>Cada bodega tiene su propio stock real y su propia curva de talla objetivo por SKU.</p>
 
-        <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, marginBottom: 14, maxHeight: 220, overflowY: "auto" }}>
+        <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, marginBottom: 14, maxHeight: 260, overflowY: "auto" }}>
           {bodegas.length === 0 && <div style={{ padding: 14, fontSize: 13, color: TOKENS.inkSoft }}>Sin bodegas todavía.</div>}
           {bodegas.map(b => (
-            <div key={b.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: `1px solid ${TOKENS.border}` }}>
-              <div>
-                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{b.nombre}</div>
-                {b.ubicacion && <div style={{ fontSize: 11.5, color: TOKENS.inkSoft }}>{b.ubicacion}</div>}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Badge tone={b.activa ? "good" : "warn"}>{b.activa ? "activa" : "inactiva"}</Badge>
-                <button onClick={() => onToggle(b)} style={{ fontSize: 11, color: TOKENS.amber, background: "none", border: "none", cursor: "pointer" }}>
-                  {b.activa ? "desactivar" : "activar"}
-                </button>
-              </div>
+            <div key={b.id} style={{ padding: "10px 12px", borderBottom: `1px solid ${TOKENS.border}` }}>
+              {editingId === b.id ? (
+                <div>
+                  <input style={{ ...miniInput, width: "100%", marginBottom: 6 }} value={editNombre} onChange={e => setEditNombre(e.target.value)} placeholder="Nombre" />
+                  <input style={{ ...miniInput, width: "100%", marginBottom: 8 }} value={editUbicacion} onChange={e => setEditUbicacion(e.target.value)} placeholder="Ubicación" />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => saveEdit(b.id)} style={{ ...btnPrimary, flex: 1, justifyContent: "center", padding: "6px 0" }}>Guardar</button>
+                    <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={14} /></button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>{b.nombre}</div>
+                    {b.ubicacion && <div style={{ fontSize: 11.5, color: TOKENS.inkSoft }}>{b.ubicacion}</div>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Badge tone={b.activa ? "good" : "warn"}>{b.activa ? "activa" : "inactiva"}</Badge>
+                    <button onClick={() => startEdit(b)} title="Editar" style={{ ...iconBtn, width: 26, height: 26 }}><Pencil size={12} /></button>
+                    <button onClick={() => onToggle(b)} style={{ fontSize: 11, color: TOKENS.amber, background: "none", border: "none", cursor: "pointer" }}>
+                      {b.activa ? "desactivar" : "activar"}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
