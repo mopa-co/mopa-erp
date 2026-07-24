@@ -188,6 +188,7 @@ export default function InventarioProductoTerminado() {
   const [showBodegas, setShowBodegas] = useState(false);
   const [curvaFor, setCurvaFor] = useState(null); // product to define talla curve for
   const [showProduccion, setShowProduccion] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
 
   async function loadAll() {
     setLoading(true);
@@ -314,6 +315,18 @@ export default function InventarioProductoTerminado() {
       setShowAddProduct(false);
     } catch (e) {
       alert("No se pudo guardar el producto: " + e.message);
+    }
+  }
+
+  async function updateProduct(productId, fields) {
+    try {
+      const [row] = await sb(`products?id=eq.${productId}`, { method: "PATCH", body: JSON.stringify(fields) });
+      const updated = productFromDB(row);
+      setProducts(prev => prev.map(p => p.id === productId ? updated : p));
+      setSelected(prev => (prev && prev.id === productId) ? updated : prev);
+      setEditingProduct(null);
+    } catch (e) {
+      alert("No se pudo actualizar el producto: " + e.message);
     }
   }
 
@@ -494,7 +507,8 @@ export default function InventarioProductoTerminado() {
       {selected && (
         <DetailDrawer product={selected} movements={productMovements(selected.id)} onClose={() => setSelected(null)}
           asunciones={asunciones} masterData={masters[selected.masterCode] || EMPTY_MASTER} onMasterUpdated={onMasterUpdated}
-          variantCount={products.filter(p => p.masterCode === selected.masterCode).length} stockInfo={getStockInfo(selected.id)} />
+          variantCount={products.filter(p => p.masterCode === selected.masterCode).length} stockInfo={getStockInfo(selected.id)}
+          onEdit={(p) => setEditingProduct(p)} />
       )}
       {showAddProduct && (
         <AddProductModal
@@ -538,6 +552,9 @@ export default function InventarioProductoTerminado() {
       )}
       {showProduccion && (
         <ProduccionModal products={products} bodegas={bodegas} bodegaStock={bodegaStock} onClose={() => setShowProduccion(false)} />
+      )}
+      {editingProduct && (
+        <EditProductModal product={editingProduct} onSave={updateProduct} onClose={() => setEditingProduct(null)} />
       )}
     </div>
   );
@@ -606,7 +623,7 @@ function ModalCenter({ children, onClose, width = 380 }) {
   );
 }
 
-function DetailDrawer({ product, movements, onClose, asunciones, masterData, onMasterUpdated, variantCount, stockInfo }) {
+function DetailDrawer({ product, movements, onClose, asunciones, masterData, onMasterUpdated, variantCount, stockInfo, onEdit }) {
   const [tab, setTab] = useState("movimientos");
   return (
     <Overlay onClose={onClose} width={440}>
@@ -615,7 +632,10 @@ function DetailDrawer({ product, movements, onClose, asunciones, masterData, onM
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TOKENS.inkSoft }}>{product.sku}</div>
           <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
         </div>
-        <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 17, margin: "2px 0 10px" }}>{product.name}</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "2px 0 10px" }}>
+          <h2 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 17, margin: 0, flex: 1 }}>{product.name}</h2>
+          <button onClick={() => onEdit(product)} title="Editar descripción" style={iconBtn}><Pencil size={14} /></button>
+        </div>
         <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
           <span style={tagStyle}>Código maestro: {product.masterCode}</span>
           {product.color && <span style={tagStyle}>Color: {product.color}</span>}
@@ -968,6 +988,36 @@ function AsuncionesModal({ asunciones, onSave, onClose }) {
         <Field label="Margen detal sugerido (% sobre precio)"><input type="number" style={input} {...pct("margenDetalPct")} /></Field>
         <Field label="IVA (%)"><input type="number" style={input} {...pct("ivaPct")} /></Field>
         <button onClick={() => { onSave(form); onClose(); }} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6 }}>Guardar configuración</button>
+      </div>
+    </ModalCenter>
+  );
+}
+
+function EditProductModal({ product, onSave, onClose }) {
+  const [name, setName] = useState(product.name);
+  const [saving, setSaving] = useState(false);
+  async function submit() {
+    if (!name.trim()) return;
+    setSaving(true);
+    await onSave(product.id, { name: name.trim() });
+    setSaving(false);
+  }
+  return (
+    <ModalCenter onClose={onClose} width={380}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Editar producto</h3>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+        <p style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 16px" }}>{product.sku}</p>
+        <Field label="Descripción">
+          <input style={input} value={name} onChange={e => setName(e.target.value)} placeholder="Descripción del producto" />
+        </Field>
+        <button
+          disabled={!name.trim() || saving}
+          onClick={submit}
+          style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6, opacity: (!name.trim() || saving) ? 0.5 : 1 }}
+        >{saving ? <Loader2 size={14} className="spin" /> : <Pencil size={15} />} Guardar cambios</button>
       </div>
     </ModalCenter>
   );
