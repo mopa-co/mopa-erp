@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -41,6 +41,19 @@ const movementFromDB = (r) => ({
   id: r.id, productId: r.product_id, sku: r.sku, type: r.type, qty: r.qty, reason: r.reason, date: r.date,
 });
 const catFromDB = (r) => ({ cod: r.cod, nombre: r.nombre, tipo: r.tipo || null });
+const bodegaFromDB = (r) => ({ id: r.id, nombre: r.nombre, ubicacion: r.ubicacion, activa: r.activa });
+const bodegaStockFromDB = (r) => ({ id: r.id, bodegaId: r.bodega_id, productId: r.product_id, stock: r.stock, stockObjetivo: r.stock_objetivo });
+const bsKey = (bodegaId, productId) => `${bodegaId}:${productId}`;
+
+async function saveBodegaStock(bodegaId, productId, fields) {
+  const [row] = await sb(`bodega_stock?on_conflict=bodega_id,product_id`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify({ bodega_id: bodegaId, product_id: productId, ...fields }),
+  });
+  return row;
+}
+
 const materialFromDB = (r) => ({ id: r.id, detalle: r.detalle, proveedor: r.proveedor, valorUnitario: Number(r.valor_unitario), cantidad: Number(r.cantidad) });
 const manoObraFromDB = (r) => ({ id: r.id, area: r.area, detalle: r.detalle, valorUnitario: Number(r.valor_unitario), cantidad: Number(r.cantidad) });
 const asuncionesFromDB = (r) => ({ cifPct: Number(r.cif_pct), margenMayoristaPct: Number(r.margen_mayorista_pct), margenDetalPct: Number(r.margen_detal_pct), ivaPct: Number(r.iva_pct) });
@@ -130,7 +143,7 @@ function StockGauge({ stock, min }) {
     <div style={{ width: 110 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 600, color: TOKENS.ink }}>{stock}</span>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: TOKENS.inkSoft }}>mín {min}</span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: TOKENS.inkSoft }}>curva {min}</span>
       </div>
       <div style={{ position: "relative", height: 6, background: "#E4E7EB", borderRadius: 3, overflow: "hidden" }}>
         <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${pct}%`, background: color, borderRadius: 3, transition: "width .3s" }} />
@@ -169,16 +182,24 @@ export default function InventarioProductoTerminado() {
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [movementFor, setMovementFor] = useState(null);
   const [catalogModalTab, setCatalogModalTab] = useState(null); // string key or null
+  const [bodegas, setBodegas] = useState([]);
+  const [bodegaStock, setBodegaStock] = useState({}); // key: `${bodegaId}:${productId}` -> {id, stock, stockObjetivo}
+  const [selectedBodegaId, setSelectedBodegaId] = useState("ALL");
+  const [showBodegas, setShowBodegas] = useState(false);
+  const [curvaFor, setCurvaFor] = useState(null); // product to define talla curve for
+  const [showProduccion, setShowProduccion] = useState(false);
 
   async function loadAll() {
     setLoading(true);
     setError(null);
     try {
-      const [prodRows, movRows, asuncionesRows, masterRows, ...catRows] = await Promise.all([
+      const [prodRows, movRows, asuncionesRows, masterRows, bodegaRows, bodegaStockRows, ...catRows] = await Promise.all([
         sb("products?select=*&order=created_at.asc", { method: "GET" }),
         sb("movements?select=*&order=created_at.desc&limit=200", { method: "GET" }),
         sb("mopa_asunciones?select=*&id=eq.1", { method: "GET" }),
         sb("product_masters?select=*", { method: "GET" }),
+        sb("bodegas?select=*&order=created_at.asc", { method: "GET" }),
+        sb("bodega_stock?select=*", { method: "GET" }),
         ...Object.values(CATALOG_TABLES).map(t => sb(`${t}?select=*&order=orden.asc`, { method: "GET" })),
       ]);
       setProducts(prodRows.map(productFromDB));
@@ -187,6 +208,12 @@ export default function InventarioProductoTerminado() {
       const mastersDict = {};
       masterRows.forEach(r => { mastersDict[r.master_code] = masterFromDB(r); });
       setMasters(mastersDict);
+      const bodegasList = bodegaRows.map(bodegaFromDB);
+      setBodegas(bodegasList);
+      setSelectedBodegaId(prev => (prev !== "ALL" && bodegasList.some(b => b.id === prev)) ? prev : "ALL");
+      const bsDict = {};
+      bodegaStockRows.forEach(r => { const m = bodegaStockFromDB(r); bsDict[bsKey(m.bodegaId, m.productId)] = m; });
+      setBodegaStock(bsDict);
       const keys = Object.keys(CATALOG_TABLES);
       const newCatalogs = {};
       keys.forEach((k, i) => { newCatalogs[k] = catRows[i].map(catFromDB); });
@@ -203,10 +230,11 @@ export default function InventarioProductoTerminado() {
   const filtered = useMemo(() => {
     return products.filter(p => {
       const matchesSearch = (p.sku + p.name).toLowerCase().includes(search.toLowerCase());
-      const matchesFilter = filter === "all" || (filter === "low" && p.stock < p.minStock);
+      const { stock, objetivo } = getStockInfo(p.id);
+      const matchesFilter = filter === "all" || (filter === "low" && objetivo > 0 && stock < objetivo);
       return matchesSearch && matchesFilter;
     });
-  }, [products, search, filter]);
+  }, [products, search, filter, bodegaStock, selectedBodegaId, bodegas]);
 
   async function updateAsunciones(next) {
     try {
@@ -227,12 +255,29 @@ export default function InventarioProductoTerminado() {
     setMasters(prev => ({ ...prev, [masterCode]: masterData }));
   }
 
+  function getStockInfo(productId) {
+    if (selectedBodegaId === "ALL") {
+      let stock = 0, objetivo = 0;
+      bodegas.forEach(b => {
+        const e = bodegaStock[bsKey(b.id, productId)];
+        if (e) { stock += e.stock; objetivo += e.stockObjetivo; }
+      });
+      return { stock, objetivo };
+    }
+    const e = bodegaStock[bsKey(selectedBodegaId, productId)];
+    return { stock: e?.stock || 0, objetivo: e?.stockObjetivo || 0 };
+  }
+
   const kpis = useMemo(() => {
-    const totalUnits = products.reduce((a, p) => a + p.stock, 0);
-    const totalValue = products.reduce((a, p) => a + p.stock * (masters[p.masterCode]?.costoTotal || 0), 0);
-    const lowStock = products.filter(p => p.stock < p.minStock).length;
+    let totalUnits = 0, totalValue = 0, lowStock = 0;
+    products.forEach(p => {
+      const { stock, objetivo } = getStockInfo(p.id);
+      totalUnits += stock;
+      totalValue += stock * (masters[p.masterCode]?.costoTotal || 0);
+      if (objetivo > 0 && stock < objetivo) lowStock++;
+    });
     return { skus: products.length, totalUnits, totalValue, lowStock };
-  }, [products, masters]);
+  }, [products, masters, bodegaStock, selectedBodegaId, bodegas]);
 
   function nextConsecutivo(codCategoria, codSegmento, codLinea, codDiseno) {
     const family = products.filter(p =>
@@ -272,20 +317,50 @@ export default function InventarioProductoTerminado() {
     }
   }
 
-  async function addMovement(product, type, qty, reason) {
+  async function addMovement(product, bodegaId, type, qty, reason) {
+    const current = bodegaStock[bsKey(bodegaId, product.id)]?.stock || 0;
     const delta = type === "entrada" ? qty : -qty;
-    const newStock = Math.max(0, product.stock + delta);
+    const newStock = Math.max(0, current + delta);
     try {
-      await sb(`products?id=eq.${product.id}`, { method: "PATCH", body: JSON.stringify({ stock: newStock }) });
-      const [row] = await sb("movements", {
+      const row = await saveBodegaStock(bodegaId, product.id, { stock: newStock });
+      const [movRow] = await sb("movements", {
         method: "POST",
-        body: JSON.stringify({ product_id: product.id, sku: product.sku, type, qty, reason, date: todayISO() }),
+        body: JSON.stringify({ product_id: product.id, bodega_id: bodegaId, sku: product.sku, type, qty, reason, date: todayISO() }),
       });
-      setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stock: newStock } : p));
-      setMovements(prev => [movementFromDB(row), ...prev]);
+      setBodegaStock(prev => ({ ...prev, [bsKey(bodegaId, product.id)]: bodegaStockFromDB(row) }));
+      setMovements(prev => [movementFromDB(movRow), ...prev]);
       setMovementFor(null);
     } catch (e) {
       alert("No se pudo registrar el movimiento: " + e.message);
+    }
+  }
+
+  async function addBodega(data) {
+    try {
+      const [row] = await sb("bodegas", { method: "POST", body: JSON.stringify({ nombre: data.nombre, ubicacion: data.ubicacion, activa: true }) });
+      setBodegas(prev => [...prev, bodegaFromDB(row)]);
+    } catch (e) { alert("No se pudo crear la bodega: " + e.message); }
+  }
+  async function toggleBodegaActiva(bodega) {
+    try {
+      await sb(`bodegas?id=eq.${bodega.id}`, { method: "PATCH", body: JSON.stringify({ activa: !bodega.activa }) });
+      setBodegas(prev => prev.map(b => b.id === bodega.id ? { ...b, activa: !b.activa } : b));
+    } catch (e) { alert("No se pudo actualizar la bodega: " + e.message); }
+  }
+
+  async function saveCurva(bodegaId, entries) {
+    // entries: [{ productId, objetivo }]
+    try {
+      const results = await Promise.all(entries.map(en =>
+        saveBodegaStock(bodegaId, en.productId, { stock_objetivo: en.objetivo })
+      ));
+      setBodegaStock(prev => {
+        const next = { ...prev };
+        results.forEach(row => { const m = bodegaStockFromDB(row); next[bsKey(m.bodegaId, m.productId)] = m; });
+        return next;
+      });
+    } catch (e) {
+      alert("No se pudo guardar la curva: " + e.message);
     }
   }
 
@@ -330,10 +405,11 @@ export default function InventarioProductoTerminado() {
           <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15 }}>MOPA</span>
         </div>
         <NavItem icon={<Package size={16} />} label="Inventario" active />
-        <NavItem icon={<ArrowUpCircle size={16} />} label="Producción" disabled />
+        <NavItem icon={<Factory size={16} />} label="Producción" onClick={() => setShowProduccion(true)} />
         <NavItem icon={<ArrowDownCircle size={16} />} label="Compras" disabled />
         <NavItem icon={<CircleDollarSign size={16} />} label="Ventas" disabled />
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${TOKENS.border}` }}>
+          <NavItem icon={<Warehouse size={16} />} label="Bodegas" onClick={() => setShowBodegas(true)} />
           <NavItem icon={<Settings2 size={16} />} label="Catálogos" onClick={() => setCatalogModalTab("categorias")} />
           <NavItem icon={<Sliders size={16} />} label="Costeo" onClick={() => setShowAsunciones(true)} />
         </div>
@@ -347,6 +423,10 @@ export default function InventarioProductoTerminado() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {loading && <span style={{ display: "flex", alignItems: "center", gap: 6, color: TOKENS.inkSoft, fontSize: 12.5 }}><Loader2 size={14} className="spin" /> Cargando...</span>}
+            <select value={selectedBodegaId} onChange={e => setSelectedBodegaId(e.target.value)} style={{ ...input, width: "auto", padding: "8px 10px" }}>
+              <option value="ALL">Todas las bodegas</option>
+              {bodegas.map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
+            </select>
             <button onClick={() => setShowAddProduct(true)} style={btnPrimary}>
               <Plus size={15} /> Nuevo producto
             </button>
@@ -378,8 +458,8 @@ export default function InventarioProductoTerminado() {
         </div>
 
         <div style={{ background: TOKENS.panel, border: `1px solid ${TOKENS.border}`, borderRadius: 10, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 140px", padding: "10px 16px", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, letterSpacing: 0.4, textTransform: "uppercase" }}>
-            <div>SKU</div><div>Producto</div><div>Categoría</div><div>Stock / mín.</div><div>Precio detal</div><div>Acciones</div>
+          <div style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 170px", padding: "10px 16px", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, letterSpacing: 0.4, textTransform: "uppercase" }}>
+            <div>SKU</div><div>Producto</div><div>Categoría</div><div>Stock / curva</div><div>Precio detal</div><div>Acciones</div>
           </div>
           {!loading && filtered.length === 0 && (
             <div style={{ padding: 32, textAlign: "center", color: TOKENS.inkSoft, fontSize: 13 }}>
@@ -387,19 +467,21 @@ export default function InventarioProductoTerminado() {
             </div>
           )}
           {filtered.map(p => {
-            const isLow = p.stock < p.minStock;
+            const { stock, objetivo } = getStockInfo(p.id);
+            const isLow = objetivo > 0 && stock < objetivo;
             const master = masters[p.masterCode] || EMPTY_MASTER;
             return (
-              <div key={p.id} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 140px", padding: "12px 16px", borderBottom: `1px solid ${TOKENS.border}`, alignItems: "center" }}>
+              <div key={p.id} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 170px", padding: "12px 16px", borderBottom: `1px solid ${TOKENS.border}`, alignItems: "center" }}>
                 <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 600 }}>{p.sku}</div>
                 <div>
                   <div style={{ fontWeight: 500 }}>{p.name}</div>
-                  {isLow && <div style={{ marginTop: 3 }}><Badge tone="crit">bajo mínimo</Badge></div>}
+                  {isLow && <div style={{ marginTop: 3 }}><Badge tone="crit">bajo curva</Badge></div>}
                 </div>
                 <div style={{ color: TOKENS.inkSoft, fontSize: 13 }}>{p.category}</div>
-                <StockGauge stock={p.stock} min={p.minStock} />
+                <StockGauge stock={stock} min={objetivo} />
                 <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{master.precioDetal > 0 ? fmtMoney(master.precioDetal) : "—"}</div>
                 <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => setCurvaFor(p)} title="Definir curva de talla" style={iconBtn}><Ruler size={15} /></button>
                   <button onClick={() => setMovementFor(p)} title="Registrar movimiento" style={iconBtn}><ArrowUpCircle size={15} /></button>
                   <button onClick={() => setSelected(p)} title="Ver historial" style={iconBtn}><History size={15} /></button>
                 </div>
@@ -412,7 +494,7 @@ export default function InventarioProductoTerminado() {
       {selected && (
         <DetailDrawer product={selected} movements={productMovements(selected.id)} onClose={() => setSelected(null)}
           asunciones={asunciones} masterData={masters[selected.masterCode] || EMPTY_MASTER} onMasterUpdated={onMasterUpdated}
-          variantCount={products.filter(p => p.masterCode === selected.masterCode).length} />
+          variantCount={products.filter(p => p.masterCode === selected.masterCode).length} stockInfo={getStockInfo(selected.id)} />
       )}
       {showAddProduct && (
         <AddProductModal
@@ -423,7 +505,10 @@ export default function InventarioProductoTerminado() {
           onOpenCatalog={(key) => setCatalogModalTab(key)}
         />
       )}
-      {movementFor && <MovementModal product={movementFor} onClose={() => setMovementFor(null)} onSave={addMovement} />}
+      {movementFor && (
+        <MovementModal product={movementFor} bodegas={bodegas} defaultBodegaId={selectedBodegaId !== "ALL" ? selectedBodegaId : bodegas[0]?.id}
+          onClose={() => setMovementFor(null)} onSave={addMovement} />
+      )}
       {catalogModalTab && (
         <CatalogsModal
           catalogs={catalogs}
@@ -436,6 +521,23 @@ export default function InventarioProductoTerminado() {
       )}
       {showAsunciones && asunciones && (
         <AsuncionesModal asunciones={asunciones} onSave={updateAsunciones} onClose={() => setShowAsunciones(false)} />
+      )}
+      {showBodegas && (
+        <BodegasModal bodegas={bodegas} onAdd={addBodega} onToggle={toggleBodegaActiva} onClose={() => setShowBodegas(false)} />
+      )}
+      {curvaFor && (
+        <CurvaModal
+          product={curvaFor}
+          siblings={products.filter(p => p.masterCode === curvaFor.masterCode && p.codColor === curvaFor.codColor)}
+          bodegas={bodegas}
+          bodegaStock={bodegaStock}
+          defaultBodegaId={selectedBodegaId !== "ALL" ? selectedBodegaId : bodegas[0]?.id}
+          onSave={saveCurva}
+          onClose={() => setCurvaFor(null)}
+        />
+      )}
+      {showProduccion && (
+        <ProduccionModal products={products} bodegas={bodegas} bodegaStock={bodegaStock} onClose={() => setShowProduccion(false)} />
       )}
     </div>
   );
@@ -504,7 +606,7 @@ function ModalCenter({ children, onClose, width = 380 }) {
   );
 }
 
-function DetailDrawer({ product, movements, onClose, asunciones, masterData, onMasterUpdated, variantCount }) {
+function DetailDrawer({ product, movements, onClose, asunciones, masterData, onMasterUpdated, variantCount, stockInfo }) {
   const [tab, setTab] = useState("movimientos");
   return (
     <Overlay onClose={onClose} width={440}>
@@ -523,11 +625,11 @@ function DetailDrawer({ product, movements, onClose, asunciones, masterData, onM
         <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
           <div style={{ flex: 1, background: TOKENS.bg, borderRadius: 8, padding: 12 }}>
             <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Stock actual</div>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18 }}>{product.stock}</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18 }}>{stockInfo.stock}</div>
           </div>
           <div style={{ flex: 1, background: TOKENS.bg, borderRadius: 8, padding: 12 }}>
-            <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Mínimo</div>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18 }}>{product.minStock}</div>
+            <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Curva objetivo</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18 }}>{stockInfo.objetivo}</div>
           </div>
           <div style={{ flex: 1, background: TOKENS.bg, borderRadius: 8, padding: 12 }}>
             <div style={{ fontSize: 11, color: TOKENS.inkSoft, marginBottom: 4 }}>Precio detal</div>
@@ -871,6 +973,168 @@ function AsuncionesModal({ asunciones, onSave, onClose }) {
   );
 }
 
+function BodegasModal({ bodegas, onAdd, onToggle, onClose }) {
+  const [nombre, setNombre] = useState("");
+  const [ubicacion, setUbicacion] = useState("");
+  function submit() {
+    if (!nombre.trim()) return;
+    onAdd({ nombre, ubicacion });
+    setNombre(""); setUbicacion("");
+  }
+  return (
+    <ModalCenter onClose={onClose} width={420}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Bodegas y puntos de distribución</h3>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 16px" }}>Cada bodega tiene su propio stock real y su propia curva de talla objetivo por SKU.</p>
+
+        <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, marginBottom: 14, maxHeight: 220, overflowY: "auto" }}>
+          {bodegas.length === 0 && <div style={{ padding: 14, fontSize: 13, color: TOKENS.inkSoft }}>Sin bodegas todavía.</div>}
+          {bodegas.map(b => (
+            <div key={b.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: `1px solid ${TOKENS.border}` }}>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{b.nombre}</div>
+                {b.ubicacion && <div style={{ fontSize: 11.5, color: TOKENS.inkSoft }}>{b.ubicacion}</div>}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Badge tone={b.activa ? "good" : "warn"}>{b.activa ? "activa" : "inactiva"}</Badge>
+                <button onClick={() => onToggle(b)} style={{ fontSize: 11, color: TOKENS.amber, background: "none", border: "none", cursor: "pointer" }}>
+                  {b.activa ? "desactivar" : "activar"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, marginBottom: 8 }}>Nueva bodega</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...input, flex: 1 }} placeholder="Nombre (ej. Tienda Centro)" value={nombre} onChange={e => setNombre(e.target.value)} />
+          <input style={{ ...input, flex: 1 }} placeholder="Ubicación" value={ubicacion} onChange={e => setUbicacion(e.target.value)} />
+        </div>
+        <button onClick={submit} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 10 }}>
+          <Plus size={15} /> Crear bodega
+        </button>
+      </div>
+    </ModalCenter>
+  );
+}
+
+function CurvaModal({ product, siblings, bodegas, bodegaStock, defaultBodegaId, onSave, onClose }) {
+  const [bodegaId, setBodegaId] = useState(defaultBodegaId || bodegas[0]?.id || "");
+  const ordered = [...siblings].sort((a, b) => a.codTalla.localeCompare(b.codTalla));
+  const [values, setValues] = useState(() => {
+    const initial = {};
+    ordered.forEach(s => { initial[s.id] = bodegaStock[bsKey(bodegaId, s.id)]?.stockObjetivo ?? 0; });
+    return initial;
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const initial = {};
+    ordered.forEach(s => { initial[s.id] = bodegaStock[bsKey(bodegaId, s.id)]?.stockObjetivo ?? 0; });
+    setValues(initial);
+  }, [bodegaId]);
+
+  async function submit() {
+    setSaving(true);
+    const entries = ordered.map(s => ({ productId: s.id, objetivo: Number(values[s.id]) || 0 }));
+    await onSave(bodegaId, entries);
+    setSaving(false);
+    onClose();
+  }
+
+  return (
+    <ModalCenter onClose={onClose} width={440}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Curva de talla</h3>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 14px" }}>
+          Unidades objetivo por talla para <strong>{product.masterCode}</strong> · color {product.color}. Cuando el stock real caiga por debajo, se marca como bajo curva.
+        </p>
+        <Field label="Bodega">
+          <select style={input} value={bodegaId} onChange={e => setBodegaId(e.target.value)}>
+            {bodegas.map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
+          </select>
+        </Field>
+        <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, overflow: "hidden", marginBottom: 16 }}>
+          {ordered.map(s => (
+            <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: `1px solid ${TOKENS.border}` }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, fontWeight: 600, width: 50 }}>{s.codTalla}</span>
+              <span style={{ fontSize: 11.5, color: TOKENS.inkSoft, flex: 1 }}>stock actual: {bodegaStock[bsKey(bodegaId, s.id)]?.stock ?? 0}</span>
+              <input
+                type="number" min="0" style={{ ...miniInput, width: 70, textAlign: "right" }}
+                value={values[s.id] ?? 0}
+                onChange={e => setValues(v => ({ ...v, [s.id]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
+        <button onClick={submit} disabled={saving} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: saving ? 0.6 : 1 }}>
+          {saving ? <Loader2 size={14} className="spin" /> : <Ruler size={15} />} Guardar curva
+        </button>
+      </div>
+    </ModalCenter>
+  );
+}
+
+function ProduccionModal({ products, bodegas, bodegaStock, onClose }) {
+  const needs = useMemo(() => {
+    const byMaster = {};
+    products.forEach(p => {
+      bodegas.forEach(b => {
+        const e = bodegaStock[bsKey(b.id, p.id)];
+        if (!e || e.stockObjetivo <= 0) return;
+        const falta = e.stockObjetivo - e.stock;
+        if (falta <= 0) return;
+        if (!byMaster[p.masterCode]) byMaster[p.masterCode] = { masterCode: p.masterCode, name: p.name, total: 0, lines: [] };
+        byMaster[p.masterCode].total += falta;
+        byMaster[p.masterCode].lines.push({ sku: p.sku, color: p.color, talla: p.codTalla, bodega: b.nombre, falta });
+      });
+    });
+    return Object.values(byMaster).sort((a, b) => b.total - a.total);
+  }, [products, bodegas, bodegaStock]);
+
+  return (
+    <ModalCenter onClose={onClose} width={520}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Necesidad de producción</h3>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 16px" }}>
+          Unidades que faltan para completar la curva objetivo en cada bodega, sumadas por diseño. Calculado en vivo — define curvas de talla para que aparezcan aquí.
+        </p>
+        {needs.length === 0 && (
+          <div style={{ padding: 20, textAlign: "center", color: TOKENS.inkSoft, fontSize: 13, background: TOKENS.bg, borderRadius: 8 }}>
+            Todo está dentro de su curva objetivo, o aún no has definido curvas de talla.
+          </div>
+        )}
+        {needs.map(m => (
+          <div key={m.masterCode} style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: TOKENS.bg }}>
+              <div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, fontWeight: 700 }}>{m.masterCode}</div>
+                <div style={{ fontSize: 11.5, color: TOKENS.inkSoft }}>{m.name}</div>
+              </div>
+              <Badge tone="crit">producir {m.total}</Badge>
+            </div>
+            {m.lines.map((l, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, padding: "6px 12px", fontSize: 12, borderTop: `1px solid ${TOKENS.border}` }}>
+                <span style={{ flex: 1, color: TOKENS.inkSoft }}>{l.color} · talla {l.talla} · {l.bodega}</span>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>+{l.falta}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </ModalCenter>
+  );
+}
+
 const miniInput = {
   boxSizing: "border-box", padding: "6px 8px", borderRadius: 6, border: `1px solid ${TOKENS.border}`,
   fontSize: 12, fontFamily: "inherit", outline: "none", background: TOKENS.panel, minWidth: 0,
@@ -1052,10 +1316,11 @@ function CatalogsModal({ catalogs, activeTab, setActiveTab, onAdd, onDelete, onC
   );
 }
 
-function MovementModal({ product, onClose, onSave }) {
+function MovementModal({ product, bodegas, defaultBodegaId, onClose, onSave }) {
   const [type, setType] = useState("entrada");
   const [qty, setQty] = useState(1);
   const [reason, setReason] = useState("");
+  const [bodegaId, setBodegaId] = useState(defaultBodegaId || bodegas[0]?.id || "");
   return (
     <ModalCenter onClose={onClose} width={380}>
       <div style={{ padding: 20 }}>
@@ -1064,6 +1329,11 @@ function MovementModal({ product, onClose, onSave }) {
           <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
         </div>
         <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, marginBottom: 16 }}>{product.sku} · {product.name}</div>
+        <Field label="Bodega">
+          <select style={input} value={bodegaId} onChange={e => setBodegaId(e.target.value)}>
+            {bodegas.map(b => <option key={b.id} value={b.id}>{b.nombre}</option>)}
+          </select>
+        </Field>
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
           <button onClick={() => setType("entrada")} style={{ ...toggleBtn, ...(type === "entrada" ? toggleActiveGood : {}) }}><ArrowUpCircle size={15} /> Entrada</button>
           <button onClick={() => setType("salida")} style={{ ...toggleBtn, ...(type === "salida" ? toggleActiveCrit : {}) }}><ArrowDownCircle size={15} /> Salida</button>
@@ -1071,9 +1341,9 @@ function MovementModal({ product, onClose, onSave }) {
         <Field label="Cantidad"><input type="number" min={1} style={input} value={qty} onChange={e => setQty(e.target.value)} /></Field>
         <Field label="Motivo"><input style={input} value={reason} onChange={e => setReason(e.target.value)} placeholder={type === "entrada" ? "Producción - orden #..." : "Venta - pedido #..."} /></Field>
         <button
-          disabled={!qty || Number(qty) <= 0}
-          onClick={() => onSave(product, type, Number(qty), reason || (type === "entrada" ? "Entrada de producción" : "Salida por venta"))}
-          style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6, opacity: (!qty || Number(qty) <= 0) ? 0.4 : 1 }}
+          disabled={!qty || Number(qty) <= 0 || !bodegaId}
+          onClick={() => onSave(product, bodegaId, type, Number(qty), reason || (type === "entrada" ? "Entrada de producción" : "Salida por venta"))}
+          style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6, opacity: (!qty || Number(qty) <= 0 || !bodegaId) ? 0.4 : 1 }}
         >Registrar</button>
       </div>
     </ModalCenter>
