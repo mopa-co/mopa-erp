@@ -222,6 +222,14 @@ export default function InventarioProductoTerminado() {
       const newCatalogs = {};
       keys.forEach((k, i) => { newCatalogs[k] = catRows[i].map(catFromDB); });
       setCatalogs(newCatalogs);
+
+      // Si la app se abrió desde un QR escaneado (?sku=...), abrir esa ficha directo
+      const skuFromUrl = new URLSearchParams(window.location.search).get("sku");
+      if (skuFromUrl) {
+        const found = prodRows.map(productFromDB).find(p => p.sku === skuFromUrl);
+        if (found) setSelected(found);
+        window.history.replaceState({}, "", window.location.pathname);
+      }
     } catch (e) {
       setError(e.message || "No se pudo conectar con la base de datos.");
     } finally {
@@ -1086,7 +1094,7 @@ function QRModal({ product, onClose }) {
         </div>
         <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 16px", textAlign: "left" }}>{product.name}</p>
         <div style={{ display: "flex", justifyContent: "center", padding: 16, background: TOKENS.panel, border: `1px solid ${TOKENS.border}`, borderRadius: 10, marginBottom: 12 }}>
-          <QRCodeCanvas ref={qrRef} value={product.sku} size={200} level="M" includeMargin bgColor="#FFFFFF" fgColor={TOKENS.ink} />
+          <QRCodeCanvas ref={qrRef} value={`${window.location.origin}${window.location.pathname}?sku=${encodeURIComponent(product.sku)}`} size={200} level="M" includeMargin bgColor="#FFFFFF" fgColor={TOKENS.ink} />
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, marginBottom: 16 }}>{product.sku}</div>
         <button onClick={download} style={{ ...btnPrimary, width: "100%", justifyContent: "center" }}>
