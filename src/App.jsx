@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
+import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -190,6 +191,7 @@ export default function InventarioProductoTerminado() {
   const [curvaFor, setCurvaFor] = useState(null); // product to define talla curve for
   const [showProduccion, setShowProduccion] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
+  const [qrFor, setQrFor] = useState(null);
 
   async function loadAll() {
     setLoading(true);
@@ -520,7 +522,7 @@ export default function InventarioProductoTerminado() {
         </div>
 
         <div style={{ background: TOKENS.panel, border: `1px solid ${TOKENS.border}`, borderRadius: 10, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 170px", padding: "10px 16px", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, letterSpacing: 0.4, textTransform: "uppercase" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 200px", padding: "10px 16px", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, letterSpacing: 0.4, textTransform: "uppercase" }}>
             <div>SKU</div><div>Producto</div><div>Categoría</div><div>Stock / curva</div><div>Precio detal</div><div>Acciones</div>
           </div>
           {!loading && filtered.length === 0 && (
@@ -533,7 +535,7 @@ export default function InventarioProductoTerminado() {
             const isLow = objetivo > 0 && stock < objetivo;
             const master = masters[p.masterCode] || EMPTY_MASTER;
             return (
-              <div key={p.id} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 170px", padding: "12px 16px", borderBottom: `1px solid ${TOKENS.border}`, alignItems: "center" }}>
+              <div key={p.id} style={{ display: "grid", gridTemplateColumns: "170px 1fr 120px 140px 100px 200px", padding: "12px 16px", borderBottom: `1px solid ${TOKENS.border}`, alignItems: "center" }}>
                 <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 600 }}>{p.sku}</div>
                 <div>
                   <div style={{ fontWeight: 500 }}>{p.name}</div>
@@ -544,6 +546,7 @@ export default function InventarioProductoTerminado() {
                 <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{master.precioDetal > 0 ? fmtMoney(master.precioDetal) : "—"}</div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <button onClick={() => setCurvaFor(p)} title="Definir curva de talla" style={iconBtn}><Ruler size={15} /></button>
+                  <button onClick={() => setQrFor(p)} title="Código QR para escanear" style={iconBtn}><QrCode size={15} /></button>
                   <button onClick={() => setMovementFor(p)} title="Registrar movimiento" style={iconBtn}><ArrowUpCircle size={15} /></button>
                   <button onClick={() => setSelected(p)} title="Ver historial" style={iconBtn}><History size={15} /></button>
                 </div>
@@ -604,6 +607,9 @@ export default function InventarioProductoTerminado() {
       )}
       {editingProduct && (
         <EditProductModal product={editingProduct} onSave={updateProduct} onClose={() => setEditingProduct(null)} />
+      )}
+      {qrFor && (
+        <QRModal product={qrFor} onClose={() => setQrFor(null)} />
       )}
     </div>
   );
@@ -1053,6 +1059,40 @@ function AsuncionesModal({ asunciones, onSave, onClose }) {
         <Field label="Margen detal sugerido (% sobre precio)"><input type="number" style={input} {...pct("margenDetalPct")} /></Field>
         <Field label="IVA (%)"><input type="number" style={input} {...pct("ivaPct")} /></Field>
         <button onClick={() => { onSave(form); onClose(); }} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6 }}>Guardar configuración</button>
+      </div>
+    </ModalCenter>
+  );
+}
+
+function QRModal({ product, onClose }) {
+  const qrRef = useRef(null);
+
+  function download() {
+    const canvas = qrRef.current;
+    if (!canvas) return;
+    const url = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `QR_${product.sku}.png`;
+    a.click();
+  }
+
+  return (
+    <ModalCenter onClose={onClose} width={340}>
+      <div style={{ padding: 20, textAlign: "center" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Código QR</h3>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 16px", textAlign: "left" }}>{product.name}</p>
+        <div style={{ display: "flex", justifyContent: "center", padding: 16, background: TOKENS.panel, border: `1px solid ${TOKENS.border}`, borderRadius: 10, marginBottom: 12 }}>
+          <QRCodeCanvas ref={qrRef} value={product.sku} size={200} level="M" includeMargin bgColor="#FFFFFF" fgColor={TOKENS.ink} />
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, marginBottom: 16 }}>{product.sku}</div>
+        <button onClick={download} style={{ ...btnPrimary, width: "100%", justifyContent: "center" }}>
+          <Download size={15} /> Descargar PNG
+        </button>
+        <p style={{ fontSize: 11, color: TOKENS.inkSoft, marginTop: 10 }}>Escanéalo con la cámara de cualquier celular — no requiere una app especial.</p>
       </div>
     </ModalCenter>
   );
