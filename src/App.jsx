@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
+import { jsPDF } from "jspdf";
 import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
@@ -1531,6 +1532,74 @@ const miniInput = {
   fontSize: 12, fontFamily: "inherit", outline: "none", background: TOKENS.panel, minWidth: 0,
 };
 
+function buildFichaRows(diseno, form, catalogs) {
+  const catNombre = catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || diseno.codCategoria;
+  const segNombre = catalogs.segmentos.find(c => c.cod === diseno.codSegmento)?.nombre || diseno.codSegmento;
+  const linNombre = catalogs.lineas.find(c => c.cod === diseno.codLinea)?.nombre || diseno.codLinea;
+  const disNombre = catalogs.disenos.find(c => c.cod === diseno.codDiseno)?.nombre || diseno.codDiseno;
+  return [
+    ["Código maestro", diseno.masterCode],
+    ["Referencia", form.nombre || ""],
+    ["Prenda", form.prenda || ""],
+    ["Categoría", catNombre], ["Segmento", segNombre], ["Línea", linNombre], ["Diseño", disNombre], ["Consecutivo", diseno.consecutivo],
+    ["Colección", form.tallaInicial || ""],
+    ["Patronista", form.patronista || ""], ["Diseñador", form.disenador || ""],
+    ["Fecha solicitud", form.fechaSolicitud || ""], ["Fecha elaboración", form.fechaElaboracion || ""], ["Año muestrario", form.anioMuestrario || ""],
+    ["Banco de muestras", form.bancoMuestras ? "Sí" : "No"], ["Réplica", form.replica ? "Sí" : "No"],
+    ["Tipo de empaque", form.tipoEmpaque || ""], ["Elaborado por", form.elaboradoPor || ""], ["Estado", form.estado || ""],
+    ["Molde (archivo)", form.moldeArchivoNombre || "—"],
+    ["Descripción de la prenda", form.descripcionPrenda || ""],
+  ];
+}
+
+function exportFichaExcel(diseno, form, composiciones, catalogs) {
+  const wb = XLSX.utils.book_new();
+  const rows = [["FICHA TÉCNICA", ""], ...buildFichaRows(diseno, form, catalogs)];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [{ wch: 22 }, { wch: 55 }];
+  XLSX.utils.book_append_sheet(wb, ws, "Ficha tecnica");
+  if (composiciones.length > 0) {
+    const compRows = [["CÓDIGO", "NOMBRE", "COLOR", "TIPO", "DESCRIPCIÓN"], ...composiciones.map(c => [c.codigo || "", c.nombre || "", c.color || "", c.tipo || "", c.descripcion || ""])];
+    const ws2 = XLSX.utils.aoa_to_sheet(compRows);
+    ws2["!cols"] = [{ wch: 12 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 32 }];
+    XLSX.utils.book_append_sheet(wb, ws2, "Composiciones");
+  }
+  XLSX.writeFile(wb, `Ficha_tecnica_${diseno.masterCode}.xlsx`);
+}
+
+function exportFichaPDF(diseno, form, composiciones, catalogs) {
+  const doc = new jsPDF();
+  let y = 16;
+  doc.setFontSize(15);
+  doc.text("Ficha técnica", 14, y);
+  y += 9;
+  doc.setFontSize(9.5);
+  buildFichaRows(diseno, form, catalogs).forEach(([label, value]) => {
+    doc.setFont(undefined, "bold");
+    doc.text(`${label}:`, 14, y);
+    doc.setFont(undefined, "normal");
+    const split = doc.splitTextToSize(String(value || "—"), 125);
+    doc.text(split, 65, y);
+    y += 5.5 * Math.max(1, split.length);
+    if (y > 275) { doc.addPage(); y = 16; }
+  });
+  if (composiciones.length > 0) {
+    y += 4;
+    doc.setFont(undefined, "bold");
+    doc.text("Composiciones:", 14, y);
+    y += 6;
+    doc.setFont(undefined, "normal");
+    composiciones.forEach(c => {
+      const line = `• ${[c.nombre, c.color].filter(Boolean).join(" - ")}${c.descripcion ? ` (${c.descripcion})` : ""}`;
+      const split = doc.splitTextToSize(line, 180);
+      doc.text(split, 14, y);
+      y += 5.2 * split.length;
+      if (y > 275) { doc.addPage(); y = 16; }
+    });
+  }
+  doc.save(`Ficha_tecnica_${diseno.masterCode}.pdf`);
+}
+
 function CodeChip({ label, value }) {
   return (
     <div style={{ background: TOKENS.bg, borderRadius: 6, padding: "6px 8px", flex: 1, textAlign: "center", minWidth: 0 }}>
@@ -1975,6 +2044,14 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
             <option value="aprobado">Aprobado</option>
             <option value="descontinuado">Descontinuado</option>
           </select>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <button onClick={() => exportFichaExcel(diseno, form, composiciones, catalogs)} style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>
+            <Download size={13} /> Excel
+          </button>
+          <button onClick={() => exportFichaPDF(diseno, form, composiciones, catalogs)} style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>
+            <Download size={13} /> PDF
+          </button>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <CodeChip label="Categoría" value={catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || diseno.codCategoria} />
