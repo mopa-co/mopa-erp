@@ -1608,6 +1608,9 @@ function exportFichaExcel(diseno, form, composiciones, catalogs) {
   merges.push({ s: { r: elaboradoRow, c: 0 }, e: { r: elaboradoRow, c: 6 } });
 
   ws["!merges"] = merges;
+  if (form.fotoUrl) ws[XLSX.utils.encode_cell({ r: fotoRow, c: 1 })].l = { Target: form.fotoUrl, Tooltip: "Ver foto" };
+  if (form.moldeArchivoUrl) ws[XLSX.utils.encode_cell({ r: moldeRow, c: 1 })].l = { Target: form.moldeArchivoUrl, Tooltip: "Descargar molde" };
+
   XLSX.utils.book_append_sheet(wb, ws, "Ficha tecnica");
   XLSX.writeFile(wb, `Ficha_tecnica_${diseno.masterCode}.xlsx`);
 }
@@ -1615,101 +1618,114 @@ function exportFichaExcel(diseno, form, composiciones, catalogs) {
 async function exportFichaPDF(diseno, form, composiciones, catalogs) {
   const doc = new jsPDF();
   const pageW = doc.internal.pageSize.getWidth();
+  const L = 14, R = pageW - 14;
+  const FILL = [225, 232, 242];
   let y = 14;
 
-  doc.setFontSize(9);
-  doc.setFont(undefined, "bold");
-  doc.text("INDUSTRIA TEXTIL DE NARIÑO SAS", 14, y);
-  doc.setFontSize(16);
-  doc.text("MOPA", pageW - 14, y, { align: "right" });
-  y += 6;
-  doc.setFontSize(10);
-  doc.setFont(undefined, "normal");
-  doc.text("FICHA TÉCNICA DISEÑO", pageW - 14, y, { align: "right" });
-  y += 8;
-  doc.setDrawColor(200);
-  doc.line(14, y, pageW - 14, y);
-  y += 7;
+  function box(x, w, h, opts = {}) {
+    if (opts.fill) doc.setFillColor(...FILL);
+    doc.setDrawColor(90, 100, 115);
+    doc.setLineWidth(0.2);
+    doc.rect(x, y, w, h, opts.fill ? "FD" : "S");
+  }
+  function cellText(x, w, h, text, { bold, size = 7.2, align = "left", pad = 2 } = {}) {
+    doc.setFont(undefined, bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    const tx = align === "center" ? x + w / 2 : x + pad;
+    doc.text(String(text ?? "—"), tx, y + h / 2 + size * 0.12, { align, maxWidth: w - pad * 2 });
+  }
+  function newPageIfNeeded(needed) {
+    if (y + needed > 285) { doc.addPage(); y = 14; }
+  }
 
-  const colX = [14, 78, 142];
+  // --- Encabezado ---
+  const headerH = 14;
+  box(L, 60, headerH);
+  cellText(L, 60, headerH, "INDUSTRIA TEXTIL DE NARIÑO SAS", { bold: true, size: 7.5, align: "center" });
+  box(L + 60, R - L - 60, headerH / 2, { fill: true });
+  doc.setFont(undefined, "bold"); doc.setFontSize(15);
+  doc.text("MOPA", (L + 60 + R) / 2, y + headerH / 4 + 2, { align: "center" });
+  y += headerH / 2;
+  box(L + 60, R - L - 60, headerH / 2);
+  cellText(L + 60, R - L - 60, headerH / 2, "FICHA TÉCNICA DISEÑO", { bold: true, size: 8.5, align: "center" });
+  y += headerH / 2;
+
+  // --- Cuadrícula 5 x 3 ---
+  const blocks = [{ x: L, labelW: 26, valueW: 34 }, { x: 76, labelW: 22, valueW: 33 }, { x: 133, labelW: 24, valueW: R - 133 - 24 }];
   const grid = fichaFieldGroups(diseno, form, catalogs);
-  doc.setFontSize(8.5);
+  const rowH = 7;
   grid.forEach(row => {
     row.forEach(([label, value], i) => {
-      doc.setFont(undefined, "bold");
-      doc.text(label, colX[i], y);
-      doc.setFont(undefined, "normal");
-      const split = doc.splitTextToSize(String(value || "—"), 60);
-      doc.text(split, colX[i], y + 4);
+      const { x, labelW, valueW } = blocks[i];
+      box(x, labelW, rowH, { fill: true });
+      cellText(x, labelW, rowH, label, { bold: true, size: 6.3 });
+      box(x + labelW, valueW, rowH);
+      cellText(x + labelW, valueW, rowH, value, { size: 7.5 });
     });
-    y += 10;
+    y += rowH;
   });
 
-  y += 2;
-  doc.setFont(undefined, "bold");
-  doc.text("TIPO DE EMPAQUE:", 14, y);
-  doc.setFont(undefined, "normal");
-  doc.text(String(form.tipoEmpaque || "—"), 55, y);
-  y += 7;
+  // --- Tipo de empaque ---
+  box(L, 36, rowH, { fill: true });
+  cellText(L, 36, rowH, "TIPO DE EMPAQUE:", { bold: true, size: 6.5 });
+  box(L + 36, R - L - 36, rowH);
+  cellText(L + 36, R - L - 36, rowH, form.tipoEmpaque, { size: 7.5 });
+  y += rowH;
 
-  doc.setFont(undefined, "bold");
-  doc.text("DESCRIPCIÓN PRENDA:", 14, y);
-  y += 4.5;
-  doc.setFont(undefined, "normal");
-  const descSplit = doc.splitTextToSize(String(form.descripcionPrenda || "—"), pageW - 28);
-  doc.text(descSplit, 14, y);
-  y += 4.5 * descSplit.length + 4;
+  // --- Descripción prenda ---
+  const descSplit = doc.splitTextToSize(String(form.descripcionPrenda || "—"), R - L - 4);
+  const descH = Math.max(rowH, 4 + descSplit.length * 4);
+  box(L, R - L, 5, { fill: true });
+  cellText(L, R - L, 5, "DESCRIPCIÓN PRENDA:", { bold: true, size: 6.5 });
+  y += 5;
+  box(L, R - L, descH - 5);
+  doc.setFont(undefined, "normal"); doc.setFontSize(7.5);
+  doc.text(descSplit, L + 2, y + 4);
+  y += descH - 5;
 
-  // Foto grande de la prenda
+  // --- Imagen ---
+  const imgBoxH = 95;
+  newPageIfNeeded(6 + imgBoxH);
+  box(L, R - L, 6, { fill: true });
+  cellText(L, R - L, 6, "IMAGEN", { bold: true, size: 8, align: "center" });
+  y += 6;
+  box(L, R - L, imgBoxH);
   if (form.fotoUrl) {
     try {
       const { dataUrl, width, height } = await fetchImagePng(form.fotoUrl);
-      const maxW = 90, maxH = 100;
+      const maxW = R - L - 10, maxH = imgBoxH - 10;
       const ratio = Math.min(maxW / width, maxH / height);
       const w = width * ratio, h = height * ratio;
-      if (y + h > 280) { doc.addPage(); y = 14; }
-      const x = (pageW - w) / 2;
-      doc.setFont(undefined, "bold");
-      doc.text("IMAGEN", pageW / 2, y, { align: "center" });
-      y += 4;
-      doc.addImage(dataUrl, "PNG", x, y, w, h);
-      y += h + 8;
+      doc.addImage(dataUrl, "PNG", L + (R - L - w) / 2, y + (imgBoxH - h) / 2, w, h);
     } catch {
-      doc.setFont(undefined, "italic");
-      doc.text("(No se pudo cargar la foto de la prenda)", 14, y);
-      y += 8;
+      doc.setFont(undefined, "italic"); doc.setFontSize(8);
+      doc.text("(No se pudo cargar la foto)", (L + R) / 2, y + imgBoxH / 2, { align: "center" });
     }
   }
+  y += imgBoxH;
 
-  if (y > 260) { doc.addPage(); y = 14; }
-  if (composiciones.length > 0) {
-    doc.setFont(undefined, "bold");
-    doc.setFontSize(10);
-    doc.text("COMPOSICIONES", 14, y);
-    y += 6;
-    doc.setFontSize(8.5);
-    doc.text("CÓDIGO", 14, y); doc.text("NOMBRE", 40, y); doc.text("COLOR", 90, y); doc.text("TIPO", 120, y); doc.text("DESCRIPCIÓN", 145, y);
-    y += 2;
-    doc.line(14, y, pageW - 14, y);
-    y += 5;
-    doc.setFont(undefined, "normal");
-    composiciones.forEach(c => {
-      doc.text(String(c.codigo || "—"), 14, y);
-      doc.text(String(c.nombre || "—"), 40, y);
-      doc.text(String(c.color || "—"), 90, y);
-      doc.text(String(c.tipo || "—"), 120, y);
-      const descSplit2 = doc.splitTextToSize(String(c.descripcion || "—"), 45);
-      doc.text(descSplit2, 145, y);
-      y += 5 * Math.max(1, descSplit2.length);
-      if (y > 280) { doc.addPage(); y = 14; }
-    });
-    y += 6;
+  // --- Composiciones ---
+  newPageIfNeeded(6 + 6);
+  box(L, R - L, 6, { fill: true });
+  cellText(L, R - L, 6, "COMPOSICIONES", { bold: true, size: 8, align: "center" });
+  y += 6;
+  const compCols = [{ x: L, w: 20, key: "codigo", label: "CÓDIGO" }, { x: L + 20, w: 45, key: "nombre", label: "NOMBRE" }, { x: L + 65, w: 30, key: "color", label: "COLOR" }, { x: L + 95, w: 25, key: "tipo", label: "TIPO" }, { x: L + 120, w: R - L - 120, key: "descripcion", label: "DESCRIPCIÓN" }];
+  compCols.forEach(c => { box(c.x, c.w, 6, { fill: true }); cellText(c.x, c.w, 6, c.label, { bold: true, size: 6.5, align: "center" }); });
+  y += 6;
+  if (composiciones.length === 0) {
+    compCols.forEach(c => box(c.x, c.w, rowH));
+    y += rowH;
   }
+  composiciones.forEach(c => {
+    newPageIfNeeded(rowH);
+    compCols.forEach(col => { box(col.x, col.w, rowH); cellText(col.x, col.w, rowH, c[col.key], { size: 7 }); });
+    y += rowH;
+  });
 
-  if (y > 280) { doc.addPage(); y = 14; }
-  doc.setFont(undefined, "bold");
-  doc.setFontSize(9);
-  doc.text(`ELABORADO POR: ${form.elaboradoPor || "—"}`, 14, y);
+  // --- Elaborado por ---
+  newPageIfNeeded(7);
+  box(L, R - L, 7, { fill: true });
+  cellText(L, R - L, 7, `ELABORADO POR: ${form.elaboradoPor || "—"}`, { bold: true, size: 8 });
 
   doc.save(`Ficha_tecnica_${diseno.masterCode}.pdf`);
 }
