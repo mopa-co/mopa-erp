@@ -1571,11 +1571,22 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     doc.setLineWidth(0.2);
     doc.rect(x, y, w, h, opts.fill ? "FD" : "S");
   }
+  function lines(text, w, size) {
+    doc.setFontSize(size);
+    return doc.splitTextToSize(String(text ?? "—"), Math.max(4, w));
+  }
+  // Celda de una sola línea, centrada verticalmente (para títulos y filas fijas)
   function cellText(x, w, h, text, { bold, size = 7.2, align = "left", pad = 2 } = {}) {
     doc.setFont(undefined, bold ? "bold" : "normal");
     doc.setFontSize(size);
     const tx = align === "center" ? x + w / 2 : x + pad;
     doc.text(String(text ?? "—"), tx, y + h / 2 + size * 0.12, { align, maxWidth: w - pad * 2 });
+  }
+  // Celda multilínea, alineada arriba, para textos que pueden ocupar más de 1 renglón
+  function cellLines(x, w, h, textLines, { bold, size = 7.2, pad = 1.6, lineH = 3.1 } = {}) {
+    doc.setFont(undefined, bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    doc.text(textLines, x + pad, y + pad + size * 0.09 + 1.6, { lineHeightFactor: lineH / size });
   }
   function newPageIfNeeded(needed) {
     if (y + needed > 285) { doc.addPage(); y = 14; }
@@ -1593,38 +1604,45 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   cellText(L + 60, R - L - 60, headerH / 2, "FICHA TÉCNICA DISEÑO", { bold: true, size: 8.5, align: "center" });
   y += headerH / 2;
 
-  // --- Cuadrícula 5 x 3 ---
+  // --- Cuadrícula 5 x 3 (alto dinámico según el texto más largo de cada fila) ---
   const blocks = [{ x: L, labelW: 26, valueW: 34 }, { x: 76, labelW: 22, valueW: 33 }, { x: 133, labelW: 24, valueW: R - 133 - 24 }];
   const grid = fichaFieldGroups(diseno, form, catalogs);
-  const rowH = 7;
+  const LBL_SIZE = 6.2, VAL_SIZE = 7.3;
   grid.forEach(row => {
-    row.forEach(([label, value], i) => {
+    const cellLinesData = row.map(([label, value], i) => ({
+      labelLines: lines(label, blocks[i].labelW - 3, LBL_SIZE),
+      valueLines: lines(value, blocks[i].valueW - 3, VAL_SIZE),
+    }));
+    const maxLines = Math.max(...cellLinesData.map(c => Math.max(c.labelLines.length, c.valueLines.length)));
+    const rH = Math.max(7, 3.4 + maxLines * 3.3);
+    row.forEach(([label], i) => {
       const { x, labelW, valueW } = blocks[i];
-      box(x, labelW, rowH, { fill: true });
-      cellText(x, labelW, rowH, label, { bold: true, size: 6.3 });
-      box(x + labelW, valueW, rowH);
-      cellText(x + labelW, valueW, rowH, value, { size: 7.5 });
+      box(x, labelW, rH, { fill: true });
+      cellLines(x, labelW, rH, cellLinesData[i].labelLines, { bold: true, size: LBL_SIZE });
+      box(x + labelW, valueW, rH);
+      cellLines(x + labelW, valueW, rH, cellLinesData[i].valueLines, { size: VAL_SIZE });
     });
-    y += rowH;
+    y += rH;
   });
 
   // --- Tipo de empaque ---
-  box(L, 36, rowH, { fill: true });
-  cellText(L, 36, rowH, "TIPO DE EMPAQUE:", { bold: true, size: 6.5 });
-  box(L + 36, R - L - 36, rowH);
-  cellText(L + 36, R - L - 36, rowH, form.tipoEmpaque, { size: 7.5 });
-  y += rowH;
+  const tipoLines = lines(form.tipoEmpaque, R - L - 40, 7.3);
+  const tipoH = Math.max(7, 3.4 + tipoLines.length * 3.3);
+  box(L, 36, tipoH, { fill: true });
+  cellText(L, 36, tipoH, "TIPO DE EMPAQUE:", { bold: true, size: 6.5 });
+  box(L + 36, R - L - 36, tipoH);
+  cellLines(L + 36, R - L - 36, tipoH, tipoLines, { size: 7.3 });
+  y += tipoH;
 
   // --- Descripción prenda ---
-  const descSplit = doc.splitTextToSize(String(form.descripcionPrenda || "—"), R - L - 4);
-  const descH = Math.max(rowH, 4 + descSplit.length * 4);
+  const descSplit = lines(form.descripcionPrenda, R - L - 4, 7.3);
+  const descH = Math.max(7, 3.4 + descSplit.length * 3.3);
   box(L, R - L, 5, { fill: true });
   cellText(L, R - L, 5, "DESCRIPCIÓN PRENDA:", { bold: true, size: 6.5 });
   y += 5;
-  box(L, R - L, descH - 5);
-  doc.setFont(undefined, "normal"); doc.setFontSize(7.5);
-  doc.text(descSplit, L + 2, y + 4);
-  y += descH - 5;
+  box(L, R - L, descH);
+  cellLines(L, R - L, descH, descSplit, { size: 7.3 });
+  y += descH;
 
   // --- Imagen ---
   const imgBoxH = 95;
@@ -1656,13 +1674,15 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   compCols.forEach(c => { box(c.x, c.w, 6, { fill: true }); cellText(c.x, c.w, 6, c.label, { bold: true, size: 6.5, align: "center" }); });
   y += 6;
   if (composiciones.length === 0) {
-    compCols.forEach(c => box(c.x, c.w, rowH));
-    y += rowH;
+    compCols.forEach(c => box(c.x, c.w, 7));
+    y += 7;
   }
   composiciones.forEach(c => {
-    newPageIfNeeded(rowH);
-    compCols.forEach(col => { box(col.x, col.w, rowH); cellText(col.x, col.w, rowH, c[col.key], { size: 7 }); });
-    y += rowH;
+    const colLines = compCols.map(col => lines(c[col.key], col.w - 3, 7));
+    const rH = Math.max(7, 3.4 + Math.max(...colLines.map(l => l.length)) * 3.3);
+    newPageIfNeeded(rH);
+    compCols.forEach((col, i) => { box(col.x, col.w, rH); cellLines(col.x, col.w, rH, colLines[i], { size: 7 }); });
+    y += rH;
   });
 
   // --- Elaborado por ---
