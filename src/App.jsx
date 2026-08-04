@@ -4,7 +4,7 @@ import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -106,6 +106,16 @@ async function saveMaster(masterCode, fields) {
   });
   return row;
 }
+
+const disenoMaestroFromDB = (r) => ({
+  masterCode: r.master_code, codCategoria: r.cod_categoria, codSegmento: r.cod_segmento, codLinea: r.cod_linea, codDiseno: r.cod_diseno,
+  consecutivo: r.consecutivo, nombre: r.nombre, temporada: r.temporada, estado: r.estado || "boceto",
+  prenda: r.prenda, molde: r.molde, lineaFicha: r.linea_ficha, tallaInicial: r.talla_inicial,
+  patronista: r.patronista, disenador: r.disenador, fechaSolicitud: r.fecha_solicitud, fechaElaboracion: r.fecha_elaboracion,
+  anioMuestrario: r.anio_muestrario, bancoMuestras: !!r.banco_muestras, replica: !!r.replica,
+  tipoEmpaque: r.tipo_empaque, descripcionPrenda: r.descripcion_prenda, elaboradoPor: r.elaborado_por,
+});
+const composicionFromDB = (r) => ({ id: r.id, codigo: r.codigo, nombre: r.nombre, color: r.color, tipo: r.tipo, descripcion: r.descripcion });
 
 function calcularCosteo(materiales, manoObra, asunciones, utilidadMayPersonalizada, utilidadDetPersonalizada) {
   const materiaPrimaTotal = materiales.reduce((a, m) => a + m.valorUnitario * m.cantidad, 0);
@@ -217,18 +227,21 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
   const [showProduccion, setShowProduccion] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [qrFor, setQrFor] = useState(null);
+  const [disenosMaestros, setDisenosMaestros] = useState([]);
+  const [showDiseno, setShowDiseno] = useState(false);
 
   async function loadAll() {
     setLoading(true);
     setError(null);
     try {
-      const [prodRows, movRows, asuncionesRows, masterRows, bodegaRows, bodegaStockRows, ...catRows] = await Promise.all([
+      const [prodRows, movRows, asuncionesRows, masterRows, bodegaRows, bodegaStockRows, disenoRows, ...catRows] = await Promise.all([
         sb("products?select=*&order=created_at.asc", { method: "GET" }),
         sb("movements?select=*&order=created_at.desc&limit=200", { method: "GET" }),
         sb("mopa_asunciones?select=*&id=eq.1", { method: "GET" }),
         sb("product_masters?select=*", { method: "GET" }),
         sb("bodegas?select=*&order=created_at.asc", { method: "GET" }),
         sb("bodega_stock?select=*", { method: "GET" }),
+        sb("disenos_maestros?select=*&order=created_at.asc", { method: "GET" }),
         ...Object.values(CATALOG_TABLES).map(t => sb(`${t}?select=*&order=orden.asc`, { method: "GET" })),
       ]);
       setProducts(prodRows.map(productFromDB));
@@ -243,6 +256,7 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
       const bsDict = {};
       bodegaStockRows.forEach(r => { const m = bodegaStockFromDB(r); bsDict[bsKey(m.bodegaId, m.productId)] = m; });
       setBodegaStock(bsDict);
+      setDisenosMaestros(disenoRows.map(disenoMaestroFromDB));
       const keys = Object.keys(CATALOG_TABLES);
       const newCatalogs = {};
       keys.forEach((k, i) => { newCatalogs[k] = catRows[i].map(catFromDB); });
@@ -354,35 +368,72 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
     return { skus: products.length, totalUnits, totalValue, lowStock };
   }, [products, masters, bodegaStock, selectedBodegaId, bodegas]);
 
-  function nextConsecutivo(codCategoria, codSegmento, codLinea, codDiseno) {
-    const family = products.filter(p =>
-      p.codCategoria === codCategoria && p.codSegmento === codSegmento &&
-      p.codLinea === codLinea && p.codDiseno === codDiseno
+  function nextConsecutivoDiseno(codCategoria, codSegmento, codLinea, codDiseno) {
+    const family = disenosMaestros.filter(d =>
+      d.codCategoria === codCategoria && d.codSegmento === codSegmento &&
+      d.codLinea === codLinea && d.codDiseno === codDiseno
     );
     if (family.length === 0) return "01";
-    const max = Math.max(0, ...family.map(p => parseInt(p.consecutivo, 10) || 0));
+    const max = Math.max(0, ...family.map(d => parseInt(d.consecutivo, 10) || 0));
     return pad2(max + 1);
   }
 
-  async function addProduct(data) {
+  async function addDisenoMaestro(data) {
     const masterCode = `${data.codCategoria}-${data.codSegmento}-${data.codLinea}-${data.codDiseno}-${data.consecutivo}`;
-    const sku = `${masterCode}-${data.codColor}-${data.codTalla}`;
-    if (products.some(p => p.sku === sku)) {
-      alert(`El SKU ${sku} ya existe. Cambia el color, talla o consecutivo.`);
+    if (disenosMaestros.some(d => d.masterCode === masterCode)) {
+      alert(`El código maestro ${masterCode} ya existe. Cambia el consecutivo.`);
       return;
     }
-    const catNombre = catalogs.categorias.find(c => c.cod === data.codCategoria)?.nombre || "";
+    try {
+      const [row] = await sb("disenos_maestros", {
+        method: "POST",
+        body: JSON.stringify({
+          master_code: masterCode, cod_categoria: data.codCategoria, cod_segmento: data.codSegmento,
+          cod_linea: data.codLinea, cod_diseno: data.codDiseno, consecutivo: data.consecutivo,
+          nombre: data.nombre, temporada: data.temporada, estado: data.estado || "boceto",
+          prenda: data.prenda, molde: data.molde, linea_ficha: data.lineaFicha, talla_inicial: data.tallaInicial,
+          patronista: data.patronista, disenador: data.disenador,
+          fecha_solicitud: data.fechaSolicitud || null, fecha_elaboracion: data.fechaElaboracion || null,
+          anio_muestrario: data.anioMuestrario, banco_muestras: !!data.bancoMuestras, replica: !!data.replica,
+          tipo_empaque: data.tipoEmpaque, descripcion_prenda: data.descripcionPrenda, elaborado_por: data.elaboradoPor,
+        }),
+      });
+      const created = disenoMaestroFromDB(row);
+      setDisenosMaestros(prev => [...prev, created]);
+      return created;
+    } catch (e) {
+      alert("No se pudo crear el diseño: " + e.message);
+    }
+  }
+
+  async function updateDisenoMaestro(masterCode, fields) {
+    try {
+      const [row] = await sb(`disenos_maestros?master_code=eq.${encodeURIComponent(masterCode)}`, { method: "PATCH", body: JSON.stringify(fields) });
+      const updated = disenoMaestroFromDB(row);
+      setDisenosMaestros(prev => prev.map(d => d.masterCode === masterCode ? updated : d));
+      return updated;
+    } catch (e) {
+      alert("No se pudo actualizar el diseño: " + e.message);
+    }
+  }
+
+  async function addProduct(data) {
+    const sku = `${data.masterCode}-${data.codColor}-${data.codTalla}`;
+    if (products.some(p => p.sku === sku)) {
+      alert(`El SKU ${sku} ya existe. Cambia el color o la talla.`);
+      return;
+    }
+    const diseno = disenosMaestros.find(d => d.masterCode === data.masterCode);
     const colorNombre = catalogs.colores.find(c => c.cod === data.codColor)?.nombre || "";
-    const disenoNombre = catalogs.disenos.find(c => c.cod === data.codDiseno)?.nombre || "";
     try {
       const [row] = await sb("products", {
         method: "POST",
         body: JSON.stringify({
-          sku, name: data.name, category: catNombre, color: colorNombre, diseno: disenoNombre,
+          sku, name: data.name, category: data.categoryLabel, color: colorNombre, diseno: diseno?.nombre || "",
           unit: "pza", min_stock: data.minStock, stock: 0,
-          cod_categoria: data.codCategoria, cod_segmento: data.codSegmento, cod_linea: data.codLinea,
-          cod_diseno: data.codDiseno, consecutivo: data.consecutivo, cod_color: data.codColor,
-          cod_talla: data.codTalla, master_code: masterCode,
+          cod_categoria: diseno?.codCategoria, cod_segmento: diseno?.codSegmento, cod_linea: diseno?.codLinea,
+          cod_diseno: diseno?.codDiseno, consecutivo: diseno?.consecutivo, cod_color: data.codColor,
+          cod_talla: data.codTalla, master_code: data.masterCode,
         }),
       });
       setProducts(prev => [...prev, productFromDB(row)]);
@@ -498,6 +549,7 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
           </div>
           <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15 }}>MOPA</span>
         </div>
+        <NavItem icon={<PenTool size={16} />} label="Diseño y Desarrollo" onClick={() => setShowDiseno(true)} />
         <NavItem icon={<Package size={16} />} label="Inventario" active />
         <NavItem icon={<Factory size={16} />} label="Producción" onClick={() => setShowProduccion(true)} />
         <NavItem icon={<ArrowDownCircle size={16} />} label="Compras" disabled />
@@ -602,10 +654,11 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
       {showAddProduct && (
         <AddProductModal
           catalogs={catalogs}
+          disenosMaestros={disenosMaestros}
           onClose={() => setShowAddProduct(false)}
           onSave={addProduct}
-          suggestConsecutivo={nextConsecutivo}
           onOpenCatalog={(key) => setCatalogModalTab(key)}
+          onOpenDiseno={() => { setShowAddProduct(false); setShowDiseno(true); }}
         />
       )}
       {movementFor && (
@@ -647,6 +700,17 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
       )}
       {qrFor && (
         <QRModal product={qrFor} onClose={() => setQrFor(null)} />
+      )}
+      {showDiseno && (
+        <DisenoModule
+          disenosMaestros={disenosMaestros}
+          catalogs={catalogs}
+          onAdd={addDisenoMaestro}
+          onUpdate={updateDisenoMaestro}
+          suggestConsecutivo={nextConsecutivoDiseno}
+          onOpenCatalog={(key) => setCatalogModalTab(key)}
+          onClose={() => setShowDiseno(false)}
+        />
       )}
     </div>
   );
@@ -1382,23 +1446,88 @@ function SkuSelect({ label, options, value, onChange, onAddNew }) {
   );
 }
 
-function AddProductModal({ catalogs, onClose, onSave, suggestConsecutivo, onOpenCatalog }) {
+const ESTADO_TONE = { boceto: "warn", desarrollo: "warn", aprobado: "good", descontinuado: "crit" };
+
+function DisenoModule({ disenosMaestros, catalogs, onAdd, onUpdate, suggestConsecutivo, onOpenCatalog, onClose }) {
+  const [selectedCode, setSelectedCode] = useState(disenosMaestros.length ? null : "NEW");
+
+  return (
+    <ModalCenter onClose={onClose} width={840}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
+          <div>
+            <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Diseño y Desarrollo</h3>
+            <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 0" }}>Aquí nace cada referencia (código maestro) con su ficha técnica.</p>
+          </div>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", gap: 14 }}>
+          <div style={{ width: 220, flexShrink: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Diseños creados</div>
+            <div style={{ maxHeight: 420, overflowY: "auto", marginBottom: 8 }}>
+              {disenosMaestros.length === 0 && <div style={{ fontSize: 12, color: TOKENS.inkSoft, padding: "8px 0" }}>Sin diseños todavía.</div>}
+              {disenosMaestros.map(d => (
+                <div key={d.masterCode} onClick={() => setSelectedCode(d.masterCode)} style={{
+                  border: `1px solid ${selectedCode === d.masterCode ? TOKENS.amber : TOKENS.border}`,
+                  background: selectedCode === d.masterCode ? TOKENS.amberSoft : TOKENS.panel,
+                  borderRadius: 7, padding: "8px 9px", marginBottom: 8, cursor: "pointer",
+                }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 600 }}>{d.masterCode}</div>
+                  <div style={{ fontSize: 11.5, marginTop: 2 }}>{d.nombre}</div>
+                  <div style={{ marginTop: 4 }}><Badge tone={ESTADO_TONE[d.estado] || "warn"}>{d.estado}</Badge></div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setSelectedCode("NEW")} style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              border: `1px dashed ${TOKENS.inkSoft}`, borderRadius: 7, padding: "9px 0", background: "none",
+              color: TOKENS.inkSoft, fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+            }}><Plus size={13} /> Nuevo diseño</button>
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0, maxHeight: 480, overflowY: "auto", paddingRight: 4 }}>
+            {selectedCode === "NEW" && (
+              <DisenoForm catalogs={catalogs} suggestConsecutivo={suggestConsecutivo} onOpenCatalog={onOpenCatalog}
+                onSave={async (data) => { const created = await onAdd(data); if (created) setSelectedCode(created.masterCode); }} />
+            )}
+            {selectedCode && selectedCode !== "NEW" && (
+              <FichaTecnicaEditor diseno={disenosMaestros.find(d => d.masterCode === selectedCode)} onUpdate={onUpdate} />
+            )}
+            {!selectedCode && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: 200, color: TOKENS.inkSoft, fontSize: 13 }}>
+                Elige un diseño de la lista o crea uno nuevo.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </ModalCenter>
+  );
+}
+
+function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave }) {
   const [codCategoria, setCodCategoria] = useState("");
   const [codSegmento, setCodSegmento] = useState("");
   const [codLinea, setCodLinea] = useState("");
   const [codDiseno, setCodDiseno] = useState("");
   const [consecutivo, setConsecutivo] = useState("");
-  const [codColor, setCodColor] = useState("");
-  const [codTalla, setCodTalla] = useState("");
-  const [name, setName] = useState("");
-  const [nameTouched, setNameTouched] = useState(false);
-  const [minStock, setMinStock] = useState(20);
-
-  const catNombre = catalogs.categorias.find(c => c.cod === codCategoria)?.nombre || "";
-  const segNombre = catalogs.segmentos.find(c => c.cod === codSegmento)?.nombre || "";
-  const linNombre = catalogs.lineas.find(c => c.cod === codLinea)?.nombre || "";
-  const disNombre = catalogs.disenos.find(c => c.cod === codDiseno)?.nombre || "";
-  const colNombre = catalogs.colores.find(c => c.cod === codColor)?.nombre || "";
+  const [nombre, setNombre] = useState("");
+  const [prenda, setPrenda] = useState("");
+  const [molde, setMolde] = useState("");
+  const [lineaFicha, setLineaFicha] = useState("");
+  const [tallaInicial, setTallaInicial] = useState("");
+  const [patronista, setPatronista] = useState("");
+  const [disenador, setDisenador] = useState("");
+  const [fechaSolicitud, setFechaSolicitud] = useState("");
+  const [fechaElaboracion, setFechaElaboracion] = useState("");
+  const [anioMuestrario, setAnioMuestrario] = useState("");
+  const [bancoMuestras, setBancoMuestras] = useState(false);
+  const [replica, setReplica] = useState(false);
+  const [tipoEmpaque, setTipoEmpaque] = useState("");
+  const [descripcionPrenda, setDescripcionPrenda] = useState("");
+  const [elaboradoPor, setElaboradoPor] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (codCategoria && codSegmento && codLinea && codDiseno) {
@@ -1406,43 +1535,259 @@ function AddProductModal({ catalogs, onClose, onSave, suggestConsecutivo, onOpen
     }
   }, [codCategoria, codSegmento, codLinea, codDiseno]);
 
-  useEffect(() => {
-    if (!nameTouched && catNombre && segNombre && linNombre) {
-      const disPart = disNombre && disNombre !== "No aplica" ? ` ${disNombre}` : "";
-      setName(`${catNombre} ${segNombre} ${linNombre}${disPart}`.trim());
-    }
-  }, [catNombre, segNombre, linNombre, disNombre, nameTouched]);
-
   const consecPadded = consecutivo ? pad2(consecutivo) : "";
   const masterCode = codCategoria && codSegmento && codLinea && codDiseno && consecPadded
     ? `${codCategoria}-${codSegmento}-${codLinea}-${codDiseno}-${consecPadded}` : "";
-  const skuPreview = masterCode && codColor && codTalla ? `${masterCode}-${codColor}-${codTalla}` : "";
+  const canSave = masterCode && nombre.trim();
 
-  const canSave = codCategoria && codSegmento && codLinea && codDiseno && consecPadded && codColor && codTalla && name.trim();
+  async function submit() {
+    setSaving(true);
+    await onSave({
+      codCategoria, codSegmento, codLinea, codDiseno, consecutivo: consecPadded, nombre, prenda, molde, lineaFicha,
+      tallaInicial, patronista, disenador, fechaSolicitud, fechaElaboracion, anioMuestrario, bancoMuestras, replica,
+      tipoEmpaque, descripcionPrenda, elaboradoPor, estado: "boceto",
+    });
+    setSaving(false);
+  }
 
   return (
-    <ModalCenter onClose={onClose} width={460}>
+    <div>
+      <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "0 0 14px" }}>El código maestro se arma solo. Usa el <Plus size={10} style={{ display: "inline", verticalAlign: -1 }} /> para agregar ítems nuevos al catálogo.</p>
+      <div style={{ display: "flex", gap: 10 }}>
+        <SkuSelect label="Categoría" options={catalogs.categorias} value={codCategoria} onChange={setCodCategoria} onAddNew={() => onOpenCatalog("categorias")} />
+        <SkuSelect label="Segmento" options={catalogs.segmentos} value={codSegmento} onChange={setCodSegmento} onAddNew={() => onOpenCatalog("segmentos")} />
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <SkuSelect label="Línea" options={catalogs.lineas} value={codLinea} onChange={setCodLinea} onAddNew={() => onOpenCatalog("lineas")} />
+        <SkuSelect label="Diseño" options={catalogs.disenos} value={codDiseno} onChange={setCodDiseno} onAddNew={() => onOpenCatalog("disenos")} />
+      </div>
+      <Field label="Consecutivo (2 dígitos, auto)"><input style={{ ...input, width: 100 }} value={consecutivo} onChange={e => setConsecutivo(e.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="01" /></Field>
+
+      {masterCode && (
+        <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+          <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Referencia"><input style={input} value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Chaqueta lateral" /></Field>
+        <Field label="Prenda"><input style={input} value={prenda} onChange={e => setPrenda(e.target.value)} placeholder="Chaqueta" /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Molde"><input style={input} value={molde} onChange={e => setMolde(e.target.value)} /></Field>
+        <Field label="Línea (ficha)"><input style={input} value={lineaFicha} onChange={e => setLineaFicha(e.target.value)} placeholder="Unisex" /></Field>
+        <Field label="Talla inicial"><input style={input} value={tallaInicial} onChange={e => setTallaInicial(e.target.value)} placeholder="M" /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Patronista"><input style={input} value={patronista} onChange={e => setPatronista(e.target.value)} /></Field>
+        <Field label="Diseñador"><input style={input} value={disenador} onChange={e => setDisenador(e.target.value)} /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Fecha solicitud"><input type="date" style={input} value={fechaSolicitud} onChange={e => setFechaSolicitud(e.target.value)} /></Field>
+        <Field label="Fecha elaboración"><input type="date" style={input} value={fechaElaboracion} onChange={e => setFechaElaboracion(e.target.value)} /></Field>
+        <Field label="Año muestrario"><input style={input} value={anioMuestrario} onChange={e => setAnioMuestrario(e.target.value)} /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 20, alignItems: "center", marginBottom: 12 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+          <input type="checkbox" checked={bancoMuestras} onChange={e => setBancoMuestras(e.target.checked)} /> Banco de muestras
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+          <input type="checkbox" checked={replica} onChange={e => setReplica(e.target.checked)} /> Réplica
+        </label>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Tipo de empaque"><input style={input} value={tipoEmpaque} onChange={e => setTipoEmpaque(e.target.value)} placeholder="Doblado" /></Field>
+        <Field label="Elaborado por"><input style={input} value={elaboradoPor} onChange={e => setElaboradoPor(e.target.value)} /></Field>
+      </div>
+      <Field label="Descripción de la prenda">
+        <textarea style={{ ...input, minHeight: 60, resize: "vertical" }} value={descripcionPrenda} onChange={e => setDescripcionPrenda(e.target.value)} />
+      </Field>
+
+      <button onClick={submit} disabled={!canSave || saving} style={{ ...btnPrimary, width: "100%", justifyContent: "center", opacity: (!canSave || saving) ? 0.5 : 1 }}>
+        {saving ? <Loader2 size={14} className="spin" /> : <PenTool size={15} />} Guardar diseño
+      </button>
+    </div>
+  );
+}
+
+function FichaTecnicaEditor({ diseno, onUpdate }) {
+  const [form, setForm] = useState(diseno);
+  const [composiciones, setComposiciones] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
+
+  useEffect(() => { setForm(diseno); }, [diseno?.masterCode]);
+
+  async function loadComposiciones() {
+    setLoading(true);
+    try {
+      const rows = await sb(`disenos_composiciones?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=created_at.asc`, { method: "GET" });
+      setComposiciones(rows.map(composicionFromDB));
+    } catch (e) { alert("No se pudo cargar composiciones: " + e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { loadComposiciones(); }, [diseno?.masterCode]);
+
+  function set(field) { return (e) => setForm(f => ({ ...f, [field]: e.target.type === "checkbox" ? e.target.checked : e.target.value })); }
+
+  async function guardar() {
+    setSaving(true);
+    await onUpdate(diseno.masterCode, {
+      nombre: form.nombre, prenda: form.prenda, molde: form.molde, linea_ficha: form.lineaFicha, talla_inicial: form.tallaInicial,
+      patronista: form.patronista, disenador: form.disenador, fecha_solicitud: form.fechaSolicitud || null, fecha_elaboracion: form.fechaElaboracion || null,
+      anio_muestrario: form.anioMuestrario, banco_muestras: !!form.bancoMuestras, replica: !!form.replica,
+      tipo_empaque: form.tipoEmpaque, descripcion_prenda: form.descripcionPrenda, elaborado_por: form.elaboradoPor, estado: form.estado,
+    });
+    setSaving(false);
+  }
+
+  async function addComposicion() {
+    if (!compForm.nombre.trim()) return;
+    try {
+      const [row] = await sb("disenos_composiciones", { method: "POST", body: JSON.stringify({ master_code: diseno.masterCode, ...compForm }) });
+      setComposiciones(prev => [...prev, composicionFromDB(row)]);
+      setCompForm({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
+    } catch (e) { alert("No se pudo agregar: " + e.message); }
+  }
+  async function deleteComposicion(id, nombre) {
+    if (!window.confirm(`¿Eliminar "${nombre}"?`)) return;
+    try { await sb(`disenos_composiciones?id=eq.${id}`, { method: "DELETE" }); setComposiciones(prev => prev.filter(c => c.id !== id)); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  if (!form) return null;
+
+  return (
+    <div>
+      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{diseno.masterCode}</div>
+        <select style={{ ...input, width: 140 }} value={form.estado} onChange={set("estado")}>
+          <option value="boceto">Boceto</option>
+          <option value="desarrollo">En desarrollo</option>
+          <option value="aprobado">Aprobado</option>
+          <option value="descontinuado">Descontinuado</option>
+        </select>
+      </div>
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Referencia"><input style={input} value={form.nombre || ""} onChange={set("nombre")} /></Field>
+        <Field label="Prenda"><input style={input} value={form.prenda || ""} onChange={set("prenda")} /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Molde"><input style={input} value={form.molde || ""} onChange={set("molde")} /></Field>
+        <Field label="Línea (ficha)"><input style={input} value={form.lineaFicha || ""} onChange={set("lineaFicha")} /></Field>
+        <Field label="Talla inicial"><input style={input} value={form.tallaInicial || ""} onChange={set("tallaInicial")} /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Patronista"><input style={input} value={form.patronista || ""} onChange={set("patronista")} /></Field>
+        <Field label="Diseñador"><input style={input} value={form.disenador || ""} onChange={set("disenador")} /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Fecha solicitud"><input type="date" style={input} value={form.fechaSolicitud || ""} onChange={set("fechaSolicitud")} /></Field>
+        <Field label="Fecha elaboración"><input type="date" style={input} value={form.fechaElaboracion || ""} onChange={set("fechaElaboracion")} /></Field>
+        <Field label="Año muestrario"><input style={input} value={form.anioMuestrario || ""} onChange={set("anioMuestrario")} /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 20, alignItems: "center", marginBottom: 12 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!form.bancoMuestras} onChange={set("bancoMuestras")} /> Banco de muestras
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!form.replica} onChange={set("replica")} /> Réplica
+        </label>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Tipo de empaque"><input style={input} value={form.tipoEmpaque || ""} onChange={set("tipoEmpaque")} /></Field>
+        <Field label="Elaborado por"><input style={input} value={form.elaboradoPor || ""} onChange={set("elaboradoPor")} /></Field>
+      </div>
+      <Field label="Descripción de la prenda">
+        <textarea style={{ ...input, minHeight: 60, resize: "vertical" }} value={form.descripcionPrenda || ""} onChange={set("descripcionPrenda")} />
+      </Field>
+
+      <button onClick={guardar} disabled={saving} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginBottom: 20, opacity: saving ? 0.6 : 1 }}>
+        {saving ? <Loader2 size={14} className="spin" /> : <Pencil size={15} />} Guardar cambios
+      </button>
+
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Composiciones</div>
+      {loading ? (
+        <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={13} className="spin" /> Cargando...</div>
+      ) : (
+        <>
+          {composiciones.map(c => (
+            <LineItemRow key={c.id} onDelete={() => deleteComposicion(c.id, c.nombre)} onEdit={() => {}} fields={[
+              { value: c.nombre, flex: 1.4 },
+              { value: c.color || "—", flex: 1, muted: true },
+              { value: c.tipo || "—", flex: 0.8, muted: true },
+              { value: c.descripcion || "—", flex: 1.6, muted: true },
+            ]} />
+          ))}
+          {composiciones.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin composiciones agregadas.</div>}
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            <input style={{ ...miniInput, flex: 1 }} placeholder="Nombre (ej. Tejido andino)" value={compForm.nombre} onChange={e => setCompForm(f => ({ ...f, nombre: e.target.value }))} />
+            <input style={{ ...miniInput, flex: "0 0 100px" }} placeholder="Color" value={compForm.color} onChange={e => setCompForm(f => ({ ...f, color: e.target.value }))} />
+            <input style={{ ...miniInput, flex: "0 0 80px" }} placeholder="Tipo" value={compForm.tipo} onChange={e => setCompForm(f => ({ ...f, tipo: e.target.value }))} />
+            <input style={{ ...miniInput, flex: 1.4 }} placeholder="Descripción (ej. 100% acrílico)" value={compForm.descripcion} onChange={e => setCompForm(f => ({ ...f, descripcion: e.target.value }))} />
+            <button onClick={addComposicion} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}><Plus size={14} /></button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AddProductModal({ catalogs, disenosMaestros, onClose, onSave, onOpenCatalog, onOpenDiseno }) {
+  const [masterCode, setMasterCode] = useState("");
+  const [codColor, setCodColor] = useState("");
+  const [codTalla, setCodTalla] = useState("");
+  const [name, setName] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
+  const [minStock, setMinStock] = useState(20);
+
+  const diseno = disenosMaestros.find(d => d.masterCode === masterCode);
+  const catNombre = catalogs.categorias.find(c => c.cod === diseno?.codCategoria)?.nombre || "";
+  const colNombre = catalogs.colores.find(c => c.cod === codColor)?.nombre || "";
+
+  useEffect(() => {
+    if (!nameTouched && diseno) {
+      setName(diseno.nombre || "");
+    }
+  }, [masterCode, nameTouched]);
+
+  const skuPreview = masterCode && codColor && codTalla ? `${masterCode}-${codColor}-${codTalla}` : "";
+  const canSave = masterCode && codColor && codTalla && name.trim();
+
+  return (
+    <ModalCenter onClose={onClose} width={440}>
       <div style={{ padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
           <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Nuevo producto</h3>
           <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
         </div>
-        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 14px" }}>El SKU se arma solo a partir de la estructura. Usa el <Plus size={10} style={{ display: "inline", verticalAlign: -1 }} /> junto a cada campo para agregar ítems nuevos al catálogo.</p>
+        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 14px" }}>Elige el diseño maestro ya creado en <strong>Diseño y Desarrollo</strong>, y agrega la variante de color y talla.</p>
 
-        <div style={{ display: "flex", gap: 10 }}>
-          <SkuSelect label="Categoría" options={catalogs.categorias} value={codCategoria} onChange={setCodCategoria} onAddNew={() => onOpenCatalog("categorias")} />
-          <SkuSelect label="Segmento" options={catalogs.segmentos} value={codSegmento} onChange={setCodSegmento} onAddNew={() => onOpenCatalog("segmentos")} />
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <SkuSelect label="Línea" options={catalogs.lineas} value={codLinea} onChange={setCodLinea} onAddNew={() => onOpenCatalog("lineas")} />
-          <SkuSelect label="Diseño" options={catalogs.disenos} value={codDiseno} onChange={setCodDiseno} onAddNew={() => onOpenCatalog("disenos")} />
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Field label="Consecutivo (2 dígitos, auto)">
-            <input style={input} value={consecutivo} onChange={e => setConsecutivo(e.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="01" />
-          </Field>
-          <div style={{ flex: 1 }} />
-        </div>
+        {disenosMaestros.length === 0 ? (
+          <div style={{ background: TOKENS.amberSoft, borderRadius: 8, padding: 14, marginBottom: 14, fontSize: 12.5 }}>
+            Todavía no hay diseños maestros creados.
+            <button onClick={onOpenDiseno} style={{ display: "block", marginTop: 8, ...btnPrimary, padding: "7px 14px" }}>
+              <PenTool size={14} /> Crear el primer diseño
+            </button>
+          </div>
+        ) : (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>Diseño maestro</span>
+              <button type="button" onClick={onOpenDiseno} title="Crear nuevo diseño" style={{ background: "none", border: "none", color: TOKENS.amber, cursor: "pointer", padding: 0, display: "flex", alignItems: "center" }}>
+                <Plus size={13} />
+              </button>
+            </div>
+            <select style={input} value={masterCode} onChange={e => setMasterCode(e.target.value)}>
+              <option value="">Selecciona...</option>
+              {disenosMaestros.map(d => <option key={d.masterCode} value={d.masterCode}>{d.masterCode} — {d.nombre}</option>)}
+            </select>
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 10 }}>
           <SkuSelect label="Color" options={catalogs.colores} value={codColor} onChange={setCodColor} onAddNew={() => onOpenCatalog("colores")} />
           <SkuSelect label="Talla" options={catalogs.tallas} value={codTalla} onChange={setCodTalla} onAddNew={() => onOpenCatalog("tallas")} />
@@ -1457,18 +1802,16 @@ function AddProductModal({ catalogs, onClose, onSave, suggestConsecutivo, onOpen
         </div>
         <p style={{ fontSize: 11.5, color: TOKENS.inkSoft, margin: "-4px 0 12px" }}>El costo y precio se definen después, en la pestaña "Costeo y precio" del producto.</p>
 
-        {(masterCode || skuPreview) && (
+        {skuPreview && (
           <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
             <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>SKU FINAL</div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>
-              {skuPreview || masterCode + "-..."}
-            </div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{skuPreview}</div>
           </div>
         )}
 
         <button
           disabled={!canSave}
-          onClick={() => onSave({ codCategoria, codSegmento, codLinea, codDiseno, consecutivo: consecPadded, codColor, codTalla, name, minStock: Number(minStock) })}
+          onClick={() => onSave({ masterCode, codColor, codTalla, name, minStock: Number(minStock), categoryLabel: catNombre })}
           style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6, opacity: canSave ? 1 : 0.4 }}
         >Guardar producto</button>
       </div>
