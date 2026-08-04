@@ -306,6 +306,19 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
     setMasters(prev => ({ ...prev, [masterCode]: masterData }));
   }
 
+  const orphanMasters = useMemo(() => {
+    const known = new Set(disenosMaestros.map(d => d.masterCode));
+    const seen = new Map();
+    products.forEach(p => {
+      if (!p.masterCode || known.has(p.masterCode) || seen.has(p.masterCode)) return;
+      seen.set(p.masterCode, {
+        masterCode: p.masterCode, codCategoria: p.codCategoria, codSegmento: p.codSegmento,
+        codLinea: p.codLinea, codDiseno: p.codDiseno, consecutivo: p.consecutivo, nombreSugerido: p.name,
+      });
+    });
+    return Array.from(seen.values());
+  }, [products, disenosMaestros]);
+
   function getStockInfo(productId) {
     if (selectedBodegaId === "ALL") {
       let stock = 0, objetivo = 0;
@@ -704,6 +717,7 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
       {showDiseno && (
         <DisenoModule
           disenosMaestros={disenosMaestros}
+          orphanMasters={orphanMasters}
           catalogs={catalogs}
           onAdd={addDisenoMaestro}
           onUpdate={updateDisenoMaestro}
@@ -1448,8 +1462,9 @@ function SkuSelect({ label, options, value, onChange, onAddNew }) {
 
 const ESTADO_TONE = { boceto: "warn", desarrollo: "warn", aprobado: "good", descontinuado: "crit" };
 
-function DisenoModule({ disenosMaestros, catalogs, onAdd, onUpdate, suggestConsecutivo, onOpenCatalog, onClose }) {
+function DisenoModule({ disenosMaestros, orphanMasters, catalogs, onAdd, onUpdate, suggestConsecutivo, onOpenCatalog, onClose }) {
   const [selectedCode, setSelectedCode] = useState(disenosMaestros.length ? null : "NEW");
+  const [importing, setImporting] = useState(null);
 
   return (
     <ModalCenter onClose={onClose} width={840}>
@@ -1464,11 +1479,28 @@ function DisenoModule({ disenosMaestros, catalogs, onAdd, onUpdate, suggestConse
 
         <div style={{ display: "flex", gap: 14 }}>
           <div style={{ width: 220, flexShrink: 0 }}>
+            {orphanMasters.length > 0 && (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.crit, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Sin ficha técnica</div>
+                <div style={{ marginBottom: 14 }}>
+                  {orphanMasters.map(o => (
+                    <div key={o.masterCode} onClick={() => { setImporting(o); setSelectedCode(null); }} style={{
+                      border: `1px solid ${importing?.masterCode === o.masterCode ? TOKENS.amber : TOKENS.critSoft}`,
+                      background: importing?.masterCode === o.masterCode ? TOKENS.amberSoft : TOKENS.critSoft,
+                      borderRadius: 7, padding: "8px 9px", marginBottom: 6, cursor: "pointer",
+                    }}>
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 600 }}>{o.masterCode}</div>
+                      <div style={{ fontSize: 11, marginTop: 2, color: TOKENS.inkSoft }}>{o.nombreSugerido}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
             <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Diseños creados</div>
-            <div style={{ maxHeight: 420, overflowY: "auto", marginBottom: 8 }}>
+            <div style={{ maxHeight: 340, overflowY: "auto", marginBottom: 8 }}>
               {disenosMaestros.length === 0 && <div style={{ fontSize: 12, color: TOKENS.inkSoft, padding: "8px 0" }}>Sin diseños todavía.</div>}
               {disenosMaestros.map(d => (
-                <div key={d.masterCode} onClick={() => setSelectedCode(d.masterCode)} style={{
+                <div key={d.masterCode} onClick={() => { setSelectedCode(d.masterCode); setImporting(null); }} style={{
                   border: `1px solid ${selectedCode === d.masterCode ? TOKENS.amber : TOKENS.border}`,
                   background: selectedCode === d.masterCode ? TOKENS.amberSoft : TOKENS.panel,
                   borderRadius: 7, padding: "8px 9px", marginBottom: 8, cursor: "pointer",
@@ -1479,7 +1511,7 @@ function DisenoModule({ disenosMaestros, catalogs, onAdd, onUpdate, suggestConse
                 </div>
               ))}
             </div>
-            <button onClick={() => setSelectedCode("NEW")} style={{
+            <button onClick={() => { setSelectedCode("NEW"); setImporting(null); }} style={{
               width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               border: `1px dashed ${TOKENS.inkSoft}`, borderRadius: 7, padding: "9px 0", background: "none",
               color: TOKENS.inkSoft, fontSize: 12, cursor: "pointer", fontFamily: "inherit",
@@ -1487,14 +1519,18 @@ function DisenoModule({ disenosMaestros, catalogs, onAdd, onUpdate, suggestConse
           </div>
 
           <div style={{ flex: 1, minWidth: 0, maxHeight: 480, overflowY: "auto", paddingRight: 4 }}>
-            {selectedCode === "NEW" && (
+            {importing && (
+              <DisenoForm catalogs={catalogs} suggestConsecutivo={suggestConsecutivo} onOpenCatalog={onOpenCatalog} lockedOrphan={importing}
+                onSave={async (data) => { const created = await onAdd(data); if (created) { setSelectedCode(created.masterCode); setImporting(null); } }} />
+            )}
+            {!importing && selectedCode === "NEW" && (
               <DisenoForm catalogs={catalogs} suggestConsecutivo={suggestConsecutivo} onOpenCatalog={onOpenCatalog}
                 onSave={async (data) => { const created = await onAdd(data); if (created) setSelectedCode(created.masterCode); }} />
             )}
-            {selectedCode && selectedCode !== "NEW" && (
+            {!importing && selectedCode && selectedCode !== "NEW" && (
               <FichaTecnicaEditor diseno={disenosMaestros.find(d => d.masterCode === selectedCode)} onUpdate={onUpdate} />
             )}
-            {!selectedCode && (
+            {!importing && !selectedCode && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: 200, color: TOKENS.inkSoft, fontSize: 13 }}>
                 Elige un diseño de la lista o crea uno nuevo.
               </div>
@@ -1506,13 +1542,13 @@ function DisenoModule({ disenosMaestros, catalogs, onAdd, onUpdate, suggestConse
   );
 }
 
-function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave }) {
-  const [codCategoria, setCodCategoria] = useState("");
-  const [codSegmento, setCodSegmento] = useState("");
-  const [codLinea, setCodLinea] = useState("");
-  const [codDiseno, setCodDiseno] = useState("");
-  const [consecutivo, setConsecutivo] = useState("");
-  const [nombre, setNombre] = useState("");
+function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, lockedOrphan }) {
+  const [codCategoria, setCodCategoria] = useState(lockedOrphan?.codCategoria || "");
+  const [codSegmento, setCodSegmento] = useState(lockedOrphan?.codSegmento || "");
+  const [codLinea, setCodLinea] = useState(lockedOrphan?.codLinea || "");
+  const [codDiseno, setCodDiseno] = useState(lockedOrphan?.codDiseno || "");
+  const [consecutivo, setConsecutivo] = useState(lockedOrphan?.consecutivo || "");
+  const [nombre, setNombre] = useState(lockedOrphan?.nombreSugerido || "");
   const [prenda, setPrenda] = useState("");
   const [molde, setMolde] = useState("");
   const [lineaFicha, setLineaFicha] = useState("");
@@ -1530,7 +1566,7 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (codCategoria && codSegmento && codLinea && codDiseno) {
+    if (!lockedOrphan && codCategoria && codSegmento && codLinea && codDiseno) {
       setConsecutivo(suggestConsecutivo(codCategoria, codSegmento, codLinea, codDiseno));
     }
   }, [codCategoria, codSegmento, codLinea, codDiseno]);
@@ -1552,18 +1588,34 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave }) {
 
   return (
     <div>
-      <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "0 0 14px" }}>El código maestro se arma solo. Usa el <Plus size={10} style={{ display: "inline", verticalAlign: -1 }} /> para agregar ítems nuevos al catálogo.</p>
-      <div style={{ display: "flex", gap: 10 }}>
-        <SkuSelect label="Categoría" options={catalogs.categorias} value={codCategoria} onChange={setCodCategoria} onAddNew={() => onOpenCatalog("categorias")} />
-        <SkuSelect label="Segmento" options={catalogs.segmentos} value={codSegmento} onChange={setCodSegmento} onAddNew={() => onOpenCatalog("segmentos")} />
-      </div>
-      <div style={{ display: "flex", gap: 10 }}>
-        <SkuSelect label="Línea" options={catalogs.lineas} value={codLinea} onChange={setCodLinea} onAddNew={() => onOpenCatalog("lineas")} />
-        <SkuSelect label="Diseño" options={catalogs.disenos} value={codDiseno} onChange={setCodDiseno} onAddNew={() => onOpenCatalog("disenos")} />
-      </div>
-      <Field label="Consecutivo (2 dígitos, auto)"><input style={{ ...input, width: 100 }} value={consecutivo} onChange={e => setConsecutivo(e.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="01" /></Field>
+      {lockedOrphan ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: TOKENS.critSoft, color: TOKENS.ink, fontSize: 11.5, padding: "8px 10px", borderRadius: 7, marginBottom: 14 }}>
+          <PenTool size={13} style={{ flexShrink: 0 }} />
+          Completando la ficha técnica de una referencia que ya existe en Inventario — el código <strong>&nbsp;{masterCode}&nbsp;</strong> no se puede cambiar aquí.
+        </div>
+      ) : (
+        <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "0 0 14px" }}>El código maestro se arma solo. Usa el <Plus size={10} style={{ display: "inline", verticalAlign: -1 }} /> para agregar ítems nuevos al catálogo.</p>
+      )}
+      {lockedOrphan ? (
+        <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+          <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 10 }}>
+            <SkuSelect label="Categoría" options={catalogs.categorias} value={codCategoria} onChange={setCodCategoria} onAddNew={() => onOpenCatalog("categorias")} />
+            <SkuSelect label="Segmento" options={catalogs.segmentos} value={codSegmento} onChange={setCodSegmento} onAddNew={() => onOpenCatalog("segmentos")} />
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <SkuSelect label="Línea" options={catalogs.lineas} value={codLinea} onChange={setCodLinea} onAddNew={() => onOpenCatalog("lineas")} />
+            <SkuSelect label="Diseño" options={catalogs.disenos} value={codDiseno} onChange={setCodDiseno} onAddNew={() => onOpenCatalog("disenos")} />
+          </div>
+          <Field label="Consecutivo (2 dígitos, auto)"><input style={{ ...input, width: 100 }} value={consecutivo} onChange={e => setConsecutivo(e.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="01" /></Field>
+        </>
+      )}
 
-      {masterCode && (
+      {!lockedOrphan && masterCode && (
         <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
           <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
