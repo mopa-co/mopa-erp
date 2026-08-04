@@ -1532,71 +1532,161 @@ const miniInput = {
   fontSize: 12, fontFamily: "inherit", outline: "none", background: TOKENS.panel, minWidth: 0,
 };
 
-function buildFichaRows(diseno, form, catalogs) {
+function fichaFieldGroups(diseno, form, catalogs) {
   const catNombre = catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || diseno.codCategoria;
   const segNombre = catalogs.segmentos.find(c => c.cod === diseno.codSegmento)?.nombre || diseno.codSegmento;
   const linNombre = catalogs.lineas.find(c => c.cod === diseno.codLinea)?.nombre || diseno.codLinea;
   const disNombre = catalogs.disenos.find(c => c.cod === diseno.codDiseno)?.nombre || diseno.codDiseno;
+  // 5 filas x 3 columnas, igual que la plantilla física
   return [
-    ["Código maestro", diseno.masterCode],
-    ["Referencia", form.nombre || ""],
-    ["Prenda", form.prenda || ""],
-    ["Categoría", catNombre], ["Segmento", segNombre], ["Línea", linNombre], ["Diseño", disNombre], ["Consecutivo", diseno.consecutivo],
-    ["Colección", form.tallaInicial || ""],
-    ["Patronista", form.patronista || ""], ["Diseñador", form.disenador || ""],
-    ["Fecha solicitud", form.fechaSolicitud || ""], ["Fecha elaboración", form.fechaElaboracion || ""], ["Año muestrario", form.anioMuestrario || ""],
-    ["Banco de muestras", form.bancoMuestras ? "Sí" : "No"], ["Réplica", form.replica ? "Sí" : "No"],
-    ["Tipo de empaque", form.tipoEmpaque || ""], ["Elaborado por", form.elaboradoPor || ""], ["Estado", form.estado || ""],
-    ["Molde (archivo)", form.moldeArchivoNombre || "—"],
-    ["Descripción de la prenda", form.descripcionPrenda || ""],
+    [["SKU MAESTRO", diseno.masterCode], ["LÍNEA", linNombre], ["DISEÑADOR", form.disenador || ""]],
+    [["REFERENCIA", form.nombre || ""], ["DISEÑO", disNombre], ["FECHA SOLICITUD", form.fechaSolicitud || ""]],
+    [["PRENDA", form.prenda || ""], ["CONSECUTIVO", diseno.consecutivo], ["FECHA ELABORACIÓN", form.fechaElaboracion || ""]],
+    [["CATEGORÍA", catNombre], ["COLECCIÓN", form.tallaInicial || ""], ["AÑO MUESTRARIO", form.anioMuestrario || ""]],
+    [["SEGMENTO", segNombre], ["PATRONISTA", form.patronista || ""], ["BANCO DE MUESTRAS", form.bancoMuestras ? "SÍ" : "NO"]],
   ];
 }
 
+async function fetchImagePng(url) {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0);
+  return { dataUrl: canvas.toDataURL("image/png"), width: bitmap.width, height: bitmap.height };
+}
+
 function exportFichaExcel(diseno, form, composiciones, catalogs) {
-  const wb = XLSX.utils.book_new();
-  const rows = [["FICHA TÉCNICA", ""], ...buildFichaRows(diseno, form, catalogs)];
+  const grid = fichaFieldGroups(diseno, form, catalogs);
+  const rows = [
+    ["INDUSTRIA TEXTIL DE NARIÑO SAS", "", "MOPA", "", "", "", ""],
+    ["", "", "FICHA TÉCNICA DISEÑO", "", "", "", ""],
+    ...grid.map(([[l1, v1], [l2, v2], [l3, v3]]) => [l1, v1, "", l2, v2, l3, v3]),
+    ["TIPO DE EMPAQUE:", form.tipoEmpaque || "", "", "", "", "", ""],
+    ["DESCRIPCIÓN PRENDA:", form.descripcionPrenda || "", "", "", "", "", ""],
+    ["FOTO:", form.fotoUrl || "—", "", "", "", "", ""],
+    ["MOLDE:", form.moldeArchivoUrl || "—", "", "", "", "", ""],
+    ["", "", "", "", "", "", ""],
+    ["COMPOSICIONES", "", "", "", "", "", ""],
+    ["CÓDIGO", "NOMBRE", "", "COLOR", "TIPO", "DESCRIPCIÓN", ""],
+    ...composiciones.map(c => [c.codigo || "", c.nombre || "", "", c.color || "", c.tipo || "", c.descripcion || "", ""]),
+    ["", "", "", "", "", "", ""],
+    [`ELABORADO POR: ${form.elaboradoPor || ""}`, "", "", "", "", "", ""],
+  ];
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws["!cols"] = [{ wch: 22 }, { wch: 55 }];
+  const wb = XLSX.utils.book_new();
+  ws["!cols"] = [{ wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 14 }];
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } }, { s: { r: 0, c: 2 }, e: { r: 0, c: 6 } }, { s: { r: 1, c: 2 }, e: { r: 1, c: 6 } },
+    { s: { r: 7, c: 1 }, e: { r: 7, c: 6 } }, { s: { r: 8, c: 1 }, e: { r: 8, c: 6 } },
+    { s: { r: 9, c: 1 }, e: { r: 9, c: 6 } }, { s: { r: 10, c: 1 }, e: { r: 10, c: 6 } },
+    { s: { r: 12, c: 0 }, e: { r: 12, c: 6 } },
+  ];
   XLSX.utils.book_append_sheet(wb, ws, "Ficha tecnica");
-  if (composiciones.length > 0) {
-    const compRows = [["CÓDIGO", "NOMBRE", "COLOR", "TIPO", "DESCRIPCIÓN"], ...composiciones.map(c => [c.codigo || "", c.nombre || "", c.color || "", c.tipo || "", c.descripcion || ""])];
-    const ws2 = XLSX.utils.aoa_to_sheet(compRows);
-    ws2["!cols"] = [{ wch: 12 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 32 }];
-    XLSX.utils.book_append_sheet(wb, ws2, "Composiciones");
-  }
   XLSX.writeFile(wb, `Ficha_tecnica_${diseno.masterCode}.xlsx`);
 }
 
-function exportFichaPDF(diseno, form, composiciones, catalogs) {
+async function exportFichaPDF(diseno, form, composiciones, catalogs) {
   const doc = new jsPDF();
-  let y = 16;
-  doc.setFontSize(15);
-  doc.text("Ficha técnica", 14, y);
-  y += 9;
-  doc.setFontSize(9.5);
-  buildFichaRows(diseno, form, catalogs).forEach(([label, value]) => {
-    doc.setFont(undefined, "bold");
-    doc.text(`${label}:`, 14, y);
-    doc.setFont(undefined, "normal");
-    const split = doc.splitTextToSize(String(value || "—"), 125);
-    doc.text(split, 65, y);
-    y += 5.5 * Math.max(1, split.length);
-    if (y > 275) { doc.addPage(); y = 16; }
+  const pageW = doc.internal.pageSize.getWidth();
+  let y = 14;
+
+  doc.setFontSize(9);
+  doc.setFont(undefined, "bold");
+  doc.text("INDUSTRIA TEXTIL DE NARIÑO SAS", 14, y);
+  doc.setFontSize(16);
+  doc.text("MOPA", pageW - 14, y, { align: "right" });
+  y += 6;
+  doc.setFontSize(10);
+  doc.setFont(undefined, "normal");
+  doc.text("FICHA TÉCNICA DISEÑO", pageW - 14, y, { align: "right" });
+  y += 8;
+  doc.setDrawColor(200);
+  doc.line(14, y, pageW - 14, y);
+  y += 7;
+
+  const colX = [14, 78, 142];
+  const grid = fichaFieldGroups(diseno, form, catalogs);
+  doc.setFontSize(8.5);
+  grid.forEach(row => {
+    row.forEach(([label, value], i) => {
+      doc.setFont(undefined, "bold");
+      doc.text(label, colX[i], y);
+      doc.setFont(undefined, "normal");
+      const split = doc.splitTextToSize(String(value || "—"), 60);
+      doc.text(split, colX[i], y + 4);
+    });
+    y += 10;
   });
+
+  y += 2;
+  doc.setFont(undefined, "bold");
+  doc.text("TIPO DE EMPAQUE:", 14, y);
+  doc.setFont(undefined, "normal");
+  doc.text(String(form.tipoEmpaque || "—"), 55, y);
+  y += 7;
+
+  doc.setFont(undefined, "bold");
+  doc.text("DESCRIPCIÓN PRENDA:", 14, y);
+  y += 4.5;
+  doc.setFont(undefined, "normal");
+  const descSplit = doc.splitTextToSize(String(form.descripcionPrenda || "—"), pageW - 28);
+  doc.text(descSplit, 14, y);
+  y += 4.5 * descSplit.length + 4;
+
+  // Foto grande de la prenda
+  if (form.fotoUrl) {
+    try {
+      const { dataUrl, width, height } = await fetchImagePng(form.fotoUrl);
+      const maxW = 90, maxH = 100;
+      const ratio = Math.min(maxW / width, maxH / height);
+      const w = width * ratio, h = height * ratio;
+      if (y + h > 280) { doc.addPage(); y = 14; }
+      const x = (pageW - w) / 2;
+      doc.setFont(undefined, "bold");
+      doc.text("IMAGEN", pageW / 2, y, { align: "center" });
+      y += 4;
+      doc.addImage(dataUrl, "PNG", x, y, w, h);
+      y += h + 8;
+    } catch {
+      doc.setFont(undefined, "italic");
+      doc.text("(No se pudo cargar la foto de la prenda)", 14, y);
+      y += 8;
+    }
+  }
+
+  if (y > 260) { doc.addPage(); y = 14; }
   if (composiciones.length > 0) {
-    y += 4;
     doc.setFont(undefined, "bold");
-    doc.text("Composiciones:", 14, y);
+    doc.setFontSize(10);
+    doc.text("COMPOSICIONES", 14, y);
     y += 6;
+    doc.setFontSize(8.5);
+    doc.text("CÓDIGO", 14, y); doc.text("NOMBRE", 40, y); doc.text("COLOR", 90, y); doc.text("TIPO", 120, y); doc.text("DESCRIPCIÓN", 145, y);
+    y += 2;
+    doc.line(14, y, pageW - 14, y);
+    y += 5;
     doc.setFont(undefined, "normal");
     composiciones.forEach(c => {
-      const line = `• ${[c.nombre, c.color].filter(Boolean).join(" - ")}${c.descripcion ? ` (${c.descripcion})` : ""}`;
-      const split = doc.splitTextToSize(line, 180);
-      doc.text(split, 14, y);
-      y += 5.2 * split.length;
-      if (y > 275) { doc.addPage(); y = 16; }
+      doc.text(String(c.codigo || "—"), 14, y);
+      doc.text(String(c.nombre || "—"), 40, y);
+      doc.text(String(c.color || "—"), 90, y);
+      doc.text(String(c.tipo || "—"), 120, y);
+      const descSplit2 = doc.splitTextToSize(String(c.descripcion || "—"), 45);
+      doc.text(descSplit2, 145, y);
+      y += 5 * Math.max(1, descSplit2.length);
+      if (y > 280) { doc.addPage(); y = 14; }
     });
+    y += 6;
   }
+
+  if (y > 280) { doc.addPage(); y = 14; }
+  doc.setFont(undefined, "bold");
+  doc.setFontSize(9);
+  doc.text(`ELABORADO POR: ${form.elaboradoPor || "—"}`, 14, y);
+
   doc.save(`Ficha_tecnica_${diseno.masterCode}.pdf`);
 }
 
@@ -1890,9 +1980,6 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
           <input type="checkbox" checked={bancoMuestras} onChange={e => setBancoMuestras(e.target.checked)} /> Banco de muestras
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
-          <input type="checkbox" checked={replica} onChange={e => setReplica(e.target.checked)} /> Réplica
-        </label>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
         <Field label="Tipo de empaque"><input style={input} value={tipoEmpaque} onChange={e => setTipoEmpaque(e.target.value)} placeholder="Doblado" /></Field>
@@ -1916,6 +2003,7 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   const [saving, setSaving] = useState(false);
   const [uploadingMolde, setUploadingMolde] = useState(false);
   const [uploadingFoto, setUploadingFoto] = useState(false);
+  const [generandoPdf, setGenerandoPdf] = useState(false);
   const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
   const [descripcionTouched, setDescripcionTouched] = useState(false);
 
@@ -2049,8 +2137,12 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
           <button onClick={() => exportFichaExcel(diseno, form, composiciones, catalogs)} style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>
             <Download size={13} /> Excel
           </button>
-          <button onClick={() => exportFichaPDF(diseno, form, composiciones, catalogs)} style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>
-            <Download size={13} /> PDF
+          <button
+            disabled={generandoPdf}
+            onClick={async () => { setGenerandoPdf(true); try { await exportFichaPDF(diseno, form, composiciones, catalogs); } catch (e) { alert("No se pudo generar el PDF: " + e.message); } finally { setGenerandoPdf(false); } }}
+            style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, opacity: generandoPdf ? 0.6 : 1 }}
+          >
+            {generandoPdf ? <Loader2 size={13} className="spin" /> : <Download size={13} />} {generandoPdf ? "Generando..." : "PDF"}
           </button>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -2079,9 +2171,6 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
       <div style={{ display: "flex", gap: 20, alignItems: "center", marginBottom: 12 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
           <input type="checkbox" checked={!!form.bancoMuestras} onChange={set("bancoMuestras")} /> Banco de muestras
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
-          <input type="checkbox" checked={!!form.replica} onChange={set("replica")} /> Réplica
         </label>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
