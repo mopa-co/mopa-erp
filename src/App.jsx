@@ -4,7 +4,7 @@ import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool, FileText, Upload
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -114,8 +114,28 @@ const disenoMaestroFromDB = (r) => ({
   patronista: r.patronista, disenador: r.disenador, fechaSolicitud: r.fecha_solicitud, fechaElaboracion: r.fecha_elaboracion,
   anioMuestrario: r.anio_muestrario, bancoMuestras: !!r.banco_muestras, replica: !!r.replica,
   tipoEmpaque: r.tipo_empaque, descripcionPrenda: r.descripcion_prenda, elaboradoPor: r.elaborado_por,
+  moldeArchivoUrl: r.molde_archivo_url, moldeArchivoNombre: r.molde_archivo_nombre,
 });
 const composicionFromDB = (r) => ({ id: r.id, codigo: r.codigo, nombre: r.nombre, color: r.color, tipo: r.tipo, descripcion: r.descripcion });
+
+async function uploadMoldeFile(masterCode, file) {
+  const path = `${encodeURIComponent(masterCode)}/${Date.now()}_${encodeURIComponent(file.name)}`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/moldes/${path}`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${currentAccessToken || SUPABASE_ANON_KEY}`,
+      "Content-Type": file.type || "application/octet-stream",
+      "x-upsert": "true",
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`No se pudo subir el archivo: ${text}`);
+  }
+  return { url: `${SUPABASE_URL}/storage/v1/object/public/moldes/${path}`, nombre: file.name };
+}
 
 function calcularCosteo(materiales, manoObra, asunciones, utilidadMayPersonalizada, utilidadDetPersonalizada) {
   const materiaPrimaTotal = materiales.reduce((a, m) => a + m.valorUnitario * m.cantidad, 0);
@@ -1699,6 +1719,7 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
   const [composiciones, setComposiciones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingMolde, setUploadingMolde] = useState(false);
   const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
 
   useEffect(() => { setForm(diseno); }, [diseno?.masterCode]);
@@ -1714,6 +1735,22 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
   useEffect(() => { loadComposiciones(); }, [diseno?.masterCode]);
 
   function set(field) { return (e) => setForm(f => ({ ...f, [field]: e.target.type === "checkbox" ? e.target.checked : e.target.value })); }
+
+  async function handleMoldeFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingMolde(true);
+    try {
+      const { url, nombre } = await uploadMoldeFile(diseno.masterCode, file);
+      await onUpdate(diseno.masterCode, { molde_archivo_url: url, molde_archivo_nombre: nombre });
+      setForm(f => ({ ...f, moldeArchivoUrl: url, moldeArchivoNombre: nombre }));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setUploadingMolde(false);
+      e.target.value = "";
+    }
+  }
 
   async function guardar() {
     setSaving(true);
@@ -1762,6 +1799,28 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
         <Field label="Molde"><input style={input} value={form.molde || ""} onChange={set("molde")} /></Field>
         <Field label="Línea (ficha)"><input style={input} value={form.lineaFicha || ""} onChange={set("lineaFicha")} /></Field>
         <Field label="Talla inicial"><input style={input} value={form.tallaInicial || ""} onChange={set("tallaInicial")} /></Field>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, marginBottom: 5 }}>Archivo del molde (.pds u otro)</div>
+        {form.moldeArchivoUrl ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: TOKENS.bg, borderRadius: 7, padding: "8px 10px" }}>
+            <FileText size={15} color={TOKENS.inkSoft} style={{ flexShrink: 0 }} />
+            <a href={form.moldeArchivoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: TOKENS.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{form.moldeArchivoNombre || "Descargar archivo"}</a>
+            <label style={{ fontSize: 11, color: TOKENS.amber, cursor: "pointer", flexShrink: 0 }}>
+              {uploadingMolde ? "Subiendo..." : "Reemplazar"}
+              <input type="file" onChange={handleMoldeFile} disabled={uploadingMolde} style={{ display: "none" }} />
+            </label>
+          </div>
+        ) : (
+          <label style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1px dashed ${TOKENS.inkSoft}`,
+            borderRadius: 7, padding: "10px 0", fontSize: 12.5, color: TOKENS.inkSoft, cursor: "pointer",
+          }}>
+            {uploadingMolde ? <Loader2 size={14} className="spin" /> : <Upload size={14} />} {uploadingMolde ? "Subiendo..." : "Subir archivo del molde"}
+            <input type="file" onChange={handleMoldeFile} disabled={uploadingMolde} style={{ display: "none" }} />
+          </label>
+        )}
       </div>
       <div style={{ display: "flex", gap: 10 }}>
         <Field label="Patronista"><input style={input} value={form.patronista || ""} onChange={set("patronista")} /></Field>
