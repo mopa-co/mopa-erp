@@ -468,6 +468,17 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
     }
   }
 
+  async function deleteProduct(productId) {
+    try {
+      await sb(`products?id=eq.${productId}`, { method: "DELETE" });
+      setProducts(prev => prev.filter(p => p.id !== productId));
+      setSelected(prev => (prev && prev.id === productId) ? null : prev);
+      setEditingProduct(null);
+    } catch (e) {
+      alert("No se pudo eliminar el producto: " + e.message);
+    }
+  }
+
   async function addMovement(product, bodegaId, type, qty, reason) {
     const current = bodegaStock[bsKey(bodegaId, product.id)]?.stock || 0;
     const delta = type === "entrada" ? qty : -qty;
@@ -709,7 +720,7 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
         <ProduccionModal products={products} bodegas={bodegas} bodegaStock={bodegaStock} onClose={() => setShowProduccion(false)} />
       )}
       {editingProduct && (
-        <EditProductModal product={editingProduct} onSave={updateProduct} onClose={() => setEditingProduct(null)} />
+        <EditProductModal product={editingProduct} onSave={updateProduct} onDelete={deleteProduct} onClose={() => setEditingProduct(null)} />
       )}
       {qrFor && (
         <QRModal product={qrFor} onClose={() => setQrFor(null)} />
@@ -1213,14 +1224,21 @@ function QRModal({ product, onClose }) {
   );
 }
 
-function EditProductModal({ product, onSave, onClose }) {
+function EditProductModal({ product, onSave, onDelete, onClose }) {
   const [name, setName] = useState(product.name);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   async function submit() {
     if (!name.trim()) return;
     setSaving(true);
     await onSave(product.id, { name: name.trim() });
     setSaving(false);
+  }
+  async function handleDelete() {
+    if (!window.confirm(`¿Eliminar el producto ${product.sku} (${product.name})? Se borrará también su stock e historial de movimientos en todas las bodegas. Esta acción no se puede deshacer.`)) return;
+    setDeleting(true);
+    await onDelete(product.id);
+    setDeleting(false);
   }
   return (
     <ModalCenter onClose={onClose} width={380}>
@@ -1238,6 +1256,19 @@ function EditProductModal({ product, onSave, onClose }) {
           onClick={submit}
           style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginTop: 6, opacity: (!name.trim() || saving) ? 0.5 : 1 }}
         >{saving ? <Loader2 size={14} className="spin" /> : <Pencil size={15} />} Guardar cambios</button>
+
+        <div style={{ borderTop: `1px solid ${TOKENS.border}`, marginTop: 18, paddingTop: 14 }}>
+          <button
+            disabled={deleting}
+            onClick={handleDelete}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              background: TOKENS.critSoft, color: TOKENS.crit, border: `1px solid ${TOKENS.crit}`, borderRadius: 8,
+              padding: "9px 0", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", opacity: deleting ? 0.6 : 1,
+            }}
+          >{deleting ? <Loader2 size={14} className="spin" /> : <Trash2 size={15} />} Eliminar producto</button>
+          <p style={{ fontSize: 11, color: TOKENS.inkSoft, margin: "6px 0 0", textAlign: "center" }}>Borra este SKU, su stock por bodega y su historial de movimientos.</p>
+        </div>
       </div>
     </ModalCenter>
   );
