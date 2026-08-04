@@ -1498,6 +1498,15 @@ const miniInput = {
   fontSize: 12, fontFamily: "inherit", outline: "none", background: TOKENS.panel, minWidth: 0,
 };
 
+function CodeChip({ label, value }) {
+  return (
+    <div style={{ background: TOKENS.bg, borderRadius: 6, padding: "6px 8px", flex: 1, textAlign: "center", minWidth: 0 }}>
+      <div style={{ fontSize: 9, color: TOKENS.inkSoft, marginBottom: 2, textTransform: "uppercase", letterSpacing: 0.3 }}>{label}</div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value || "—"}</div>
+    </div>
+  );
+}
+
 function FotoThumb({ url, size = 44 }) {
   return url ? (
     <img src={url} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 7, border: `1px solid ${TOKENS.border}`, flexShrink: 0 }} />
@@ -1624,7 +1633,7 @@ function DisenoModule({ disenosMaestros, orphanMasters, catalogs, onAdd, onUpdat
                 onSave={async (data) => { const created = await onAdd(data); if (created) setSelectedCode(created.masterCode); }} />
             )}
             {!importing && selectedCode && selectedCode !== "NEW" && (
-              <FichaTecnicaEditor diseno={disenosMaestros.find(d => d.masterCode === selectedCode)} onUpdate={onUpdate} />
+              <FichaTecnicaEditor diseno={disenosMaestros.find(d => d.masterCode === selectedCode)} onUpdate={onUpdate} catalogs={catalogs} />
             )}
             {!importing && !selectedCode && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: 200, color: TOKENS.inkSoft, fontSize: 13 }}>
@@ -1721,10 +1730,15 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
       )}
       {lockedOrphan ? (
         <div style={{ display: "flex", alignItems: "center", gap: 12, background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <FotoThumb url={fotoUrl} />
-          <div>
-            <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+          <FotoThumb url={fotoUrl} size={54} />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <input value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Referencia"
+              style={{ background: "none", border: "none", outline: "none", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: TOKENS.ink, padding: 0, width: "100%" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: TOKENS.inkSoft }}>{masterCode}</span>
+              <input value={prenda} onChange={e => setPrenda(e.target.value)} placeholder="Prenda"
+                style={{ background: "none", border: "none", outline: "none", fontSize: 11.5, color: TOKENS.inkSoft, padding: 0, width: 110 }} />
+            </div>
           </div>
         </div>
       ) : (
@@ -1743,18 +1757,19 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
 
       {!lockedOrphan && masterCode && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <FotoThumb url={fotoUrl} />
-          <div>
-            <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+          <FotoThumb url={fotoUrl} size={54} />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <input value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Referencia"
+              style={{ background: "none", border: "none", outline: "none", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: TOKENS.ink, padding: 0, width: "100%" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: TOKENS.inkSoft }}>{masterCode}</span>
+              <input value={prenda} onChange={e => setPrenda(e.target.value)} placeholder="Prenda"
+                style={{ background: "none", border: "none", outline: "none", fontSize: 11.5, color: TOKENS.inkSoft, padding: 0, width: 110 }} />
+            </div>
           </div>
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 10 }}>
-        <Field label="Referencia"><input style={input} value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Chaqueta lateral" /></Field>
-        <Field label="Prenda"><input style={input} value={prenda} onChange={e => setPrenda(e.target.value)} placeholder="Chaqueta" /></Field>
-      </div>
       <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
         <FileUploadField label="Molde" fileUrl={moldeArchivoUrl} fileName={moldeArchivoNombre} uploading={uploadingMolde} disabled={!masterCode} onChange={handleMoldeFile} />
         <FileUploadField label="Foto" fileUrl={fotoUrl} fileName={fotoUrl ? "Foto de la prenda" : null} uploading={uploadingFoto} disabled={!masterCode} onChange={handleFotoFile} isImage />
@@ -1792,7 +1807,7 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
   );
 }
 
-function FichaTecnicaEditor({ diseno, onUpdate }) {
+function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   const [form, setForm] = useState(diseno);
   const [composiciones, setComposiciones] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1876,23 +1891,40 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
 
   return (
     <div>
-      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <FotoThumb url={form.fotoUrl} />
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{diseno.masterCode}</div>
+      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "12px", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
+            <FotoThumb url={form.fotoUrl} size={54} />
+            <div style={{ minWidth: 0 }}>
+              <input
+                value={form.nombre || ""} onChange={set("nombre")} placeholder="Referencia"
+                style={{ background: "none", border: "none", outline: "none", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: TOKENS.ink, padding: 0, width: "100%" }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: TOKENS.inkSoft }}>{diseno.masterCode}</span>
+                <input
+                  value={form.prenda || ""} onChange={set("prenda")} placeholder="Prenda"
+                  style={{ background: "none", border: "none", outline: "none", fontSize: 11.5, color: TOKENS.inkSoft, padding: 0, width: 110 }}
+                />
+              </div>
+            </div>
+          </div>
+          <select style={{ ...input, width: 140, flexShrink: 0 }} value={form.estado} onChange={set("estado")}>
+            <option value="boceto">Boceto</option>
+            <option value="desarrollo">En desarrollo</option>
+            <option value="aprobado">Aprobado</option>
+            <option value="descontinuado">Descontinuado</option>
+          </select>
         </div>
-        <select style={{ ...input, width: 140 }} value={form.estado} onChange={set("estado")}>
-          <option value="boceto">Boceto</option>
-          <option value="desarrollo">En desarrollo</option>
-          <option value="aprobado">Aprobado</option>
-          <option value="descontinuado">Descontinuado</option>
-        </select>
+        <div style={{ display: "flex", gap: 6 }}>
+          <CodeChip label="Categoría" value={catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || diseno.codCategoria} />
+          <CodeChip label="Segmento" value={catalogs.segmentos.find(c => c.cod === diseno.codSegmento)?.nombre || diseno.codSegmento} />
+          <CodeChip label="Línea" value={catalogs.lineas.find(c => c.cod === diseno.codLinea)?.nombre || diseno.codLinea} />
+          <CodeChip label="Diseño" value={catalogs.disenos.find(c => c.cod === diseno.codDiseno)?.nombre || diseno.codDiseno} />
+          <CodeChip label="Consecutivo" value={diseno.consecutivo} />
+        </div>
       </div>
 
-      <div style={{ display: "flex", gap: 10 }}>
-        <Field label="Referencia"><input style={input} value={form.nombre || ""} onChange={set("nombre")} /></Field>
-        <Field label="Prenda"><input style={input} value={form.prenda || ""} onChange={set("prenda")} /></Field>
-      </div>
       <div style={{ display: "flex", gap: 10 }}>
         <FileUploadField label="Molde" fileUrl={form.moldeArchivoUrl} fileName={form.moldeArchivoNombre} uploading={uploadingMolde} onChange={handleMoldeFile} />
         <FileUploadField label="Foto" fileUrl={form.fotoUrl} fileName="Foto de la prenda" uploading={uploadingFoto} onChange={handleFotoFile} isImage />
