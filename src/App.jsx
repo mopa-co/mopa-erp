@@ -1815,6 +1815,7 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   const [uploadingMolde, setUploadingMolde] = useState(false);
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
+  const [descripcionTouched, setDescripcionTouched] = useState(false);
 
   useEffect(() => { setForm(diseno); }, [diseno?.masterCode]);
 
@@ -1828,7 +1829,33 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   }
   useEffect(() => { loadComposiciones(); }, [diseno?.masterCode]);
 
+  function descripcionSugerida() {
+    const catNombre = catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || "";
+    const segNombre = catalogs.segmentos.find(c => c.cod === diseno.codSegmento)?.nombre || "";
+    const linNombre = catalogs.lineas.find(c => c.cod === diseno.codLinea)?.nombre || "";
+    const disNombre = catalogs.disenos.find(c => c.cod === diseno.codDiseno)?.nombre || "";
+    const base = (form?.prenda || catNombre || "").trim();
+    const disPart = disNombre && disNombre !== "No aplica" ? ` ${disNombre}` : "";
+    let texto = `${base} ${segNombre} ${linNombre}${disPart}`.replace(/\s+/g, " ").trim();
+    if (composiciones.length > 0) {
+      const partes = composiciones.map(c => {
+        const detalle = [c.nombre, c.color].filter(Boolean).join(" ");
+        return c.descripcion ? `${detalle} (${c.descripcion})` : detalle;
+      }).filter(Boolean);
+      texto += `. Composición: ${partes.join(", ")}.`;
+    }
+    return texto;
+  }
+
+  useEffect(() => {
+    if (!form || descripcionTouched) return;
+    const sugerida = descripcionSugerida();
+    if (sugerida) setForm(f => ({ ...f, descripcionPrenda: sugerida }));
+  }, [form?.prenda, composiciones, catalogs]);
+
   function set(field) { return (e) => setForm(f => ({ ...f, [field]: e.target.type === "checkbox" ? e.target.checked : e.target.value })); }
+  function setDescripcion(e) { setDescripcionTouched(true); setForm(f => ({ ...f, descripcionPrenda: e.target.value })); }
+  function regenerarDescripcion() { setDescripcionTouched(false); setForm(f => ({ ...f, descripcionPrenda: descripcionSugerida() })); }
 
   async function handleMoldeFile(e) {
     const file = e.target.files?.[0];
@@ -1951,9 +1978,16 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
         <Field label="Tipo de empaque"><input style={input} value={form.tipoEmpaque || ""} onChange={set("tipoEmpaque")} /></Field>
         <Field label="Elaborado por"><input style={input} value={form.elaboradoPor || ""} onChange={set("elaboradoPor")} /></Field>
       </div>
-      <Field label="Descripción de la prenda">
-        <textarea style={{ ...input, minHeight: 60, resize: "vertical" }} value={form.descripcionPrenda || ""} onChange={set("descripcionPrenda")} />
-      </Field>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>Descripción de la prenda</span>
+          <button type="button" onClick={regenerarDescripcion} title="Regenerar desde el SKU y las composiciones" style={{ background: "none", border: "none", color: TOKENS.amber, cursor: "pointer", fontSize: 10.5, padding: 0 }}>
+            Regenerar automática
+          </button>
+        </div>
+        <textarea style={{ ...input, minHeight: 60, resize: "vertical" }} value={form.descripcionPrenda || ""} onChange={setDescripcion} />
+        <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "4px 0 0" }}>Se genera sola a partir de la prenda, segmento, línea, diseño y las composiciones que agregues abajo. Puedes editarla a mano si quieres.</p>
+      </div>
 
       <button onClick={guardar} disabled={saving} style={{ ...btnPrimary, width: "100%", justifyContent: "center", marginBottom: 20, opacity: saving ? 0.6 : 1 }}>
         {saving ? <Loader2 size={14} className="spin" /> : <Pencil size={15} />} Guardar cambios
