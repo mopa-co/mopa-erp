@@ -1577,13 +1577,37 @@ function exportFichaExcel(diseno, form, composiciones, catalogs) {
   ];
   const ws = XLSX.utils.aoa_to_sheet(rows);
   const wb = XLSX.utils.book_new();
-  ws["!cols"] = [{ wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 14 }];
-  ws["!merges"] = [
-    { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } }, { s: { r: 0, c: 2 }, e: { r: 0, c: 6 } }, { s: { r: 1, c: 2 }, e: { r: 1, c: 6 } },
-    { s: { r: 7, c: 1 }, e: { r: 7, c: 6 } }, { s: { r: 8, c: 1 }, e: { r: 8, c: 6 } },
-    { s: { r: 9, c: 1 }, e: { r: 9, c: 6 } }, { s: { r: 10, c: 1 }, e: { r: 10, c: 6 } },
-    { s: { r: 12, c: 0 }, e: { r: 12, c: 6 } },
+  ws["!cols"] = [{ wch: 20 }, { wch: 20 }, { wch: 3 }, { wch: 16 }, { wch: 16 }, { wch: 26 }, { wch: 3 }];
+
+  const merges = [
+    { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } }, // nombre empresa
+    { s: { r: 0, c: 2 }, e: { r: 0, c: 6 } }, // MOPA
+    { s: { r: 1, c: 2 }, e: { r: 1, c: 6 } }, // subtítulo
   ];
+  // filas de la cuadrícula (SKU maestro...Banco de muestras): fusiona el valor de la 1ra columna (B:C)
+  grid.forEach((_, i) => merges.push({ s: { r: 2 + i, c: 1 }, e: { r: 2 + i, c: 2 } }));
+
+  const tipoRow = 2 + grid.length;      // Tipo de empaque
+  const descRow = tipoRow + 1;          // Descripción prenda
+  const fotoRow = descRow + 1;          // Foto
+  const moldeRow = fotoRow + 1;         // Molde
+  const compHeaderRow = moldeRow + 2;   // "COMPOSICIONES" (después de una fila en blanco)
+  const tableHeaderRow = compHeaderRow + 1;
+  const dataStart = tableHeaderRow + 1;
+  const dataEnd = dataStart + composiciones.length - 1;
+  const elaboradoRow = dataEnd + 2;     // después de una fila en blanco
+
+  [tipoRow, descRow, fotoRow, moldeRow].forEach(r => merges.push({ s: { r, c: 1 }, e: { r, c: 6 } }));
+  merges.push({ s: { r: compHeaderRow, c: 0 }, e: { r: compHeaderRow, c: 6 } });
+  merges.push({ s: { r: tableHeaderRow, c: 1 }, e: { r: tableHeaderRow, c: 2 } }); // NOMBRE
+  merges.push({ s: { r: tableHeaderRow, c: 5 }, e: { r: tableHeaderRow, c: 6 } }); // DESCRIPCIÓN
+  for (let r = dataStart; r <= dataEnd; r++) {
+    merges.push({ s: { r, c: 1 }, e: { r, c: 2 } });
+    merges.push({ s: { r, c: 5 }, e: { r, c: 6 } });
+  }
+  merges.push({ s: { r: elaboradoRow, c: 0 }, e: { r: elaboradoRow, c: 6 } });
+
+  ws["!merges"] = merges;
   XLSX.utils.book_append_sheet(wb, ws, "Ficha tecnica");
   XLSX.writeFile(wb, `Ficha_tecnica_${diseno.masterCode}.xlsx`);
 }
