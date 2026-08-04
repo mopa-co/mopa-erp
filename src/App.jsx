@@ -14,8 +14,32 @@ const SESSION_KEY = "mopa_session";
 
 // Token del usuario logueado (se actualiza al iniciar/cerrar sesión). Mientras no haya sesión, se usa la llave anónima.
 let currentAccessToken = null;
+let currentRefreshToken = null;
+// Se conecta desde el componente App para forzar el login si la sesión ya no se puede renovar.
+let onAuthExpired = () => {};
 
-async function sb(path, options = {}) {
+function saveSessionTokens(access_token, refresh_token, email) {
+  currentAccessToken = access_token;
+  currentRefreshToken = refresh_token;
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ access_token, refresh_token, email })); } catch {}
+}
+
+async function refreshAccessToken() {
+  if (!currentRefreshToken) throw new Error("Sin sesión para renovar");
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: currentRefreshToken }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || "No se pudo renovar la sesión");
+  let email = data.user?.email;
+  try { email = email || JSON.parse(localStorage.getItem(SESSION_KEY) || "{}").email; } catch {}
+  saveSessionTokens(data.access_token, data.refresh_token, email);
+  return data;
+}
+
+async function sb(path, options = {}, _retry = true) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...options,
     headers: {
@@ -26,6 +50,15 @@ async function sb(path, options = {}) {
       ...(options.headers || {}),
     },
   });
+  if (res.status === 401 && _retry && currentRefreshToken) {
+    try {
+      await refreshAccessToken();
+      return sb(path, options, false);
+    } catch {
+      onAuthExpired();
+      throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
+    }
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Supabase ${res.status}: ${text}`);
@@ -50,7 +83,7 @@ function loadStoredSession() {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw);
-    if (s?.access_token) { currentAccessToken = s.access_token; return s; }
+    if (s?.access_token) { currentAccessToken = s.access_token; currentRefreshToken = s.refresh_token; return s; }
     return null;
   } catch { return null; }
 }
@@ -2282,17 +2315,19 @@ export default function App() {
   const [session, setSession] = useState(() => loadStoredSession());
 
   function handleLogin(data) {
-    currentAccessToken = data.access_token;
     const s = { access_token: data.access_token, refresh_token: data.refresh_token, email: data.user?.email };
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch {}
+    saveSessionTokens(s.access_token, s.refresh_token, s.email);
     setSession(s);
   }
 
   function handleLogout() {
     currentAccessToken = null;
+    currentRefreshToken = null;
     try { localStorage.removeItem(SESSION_KEY); } catch {}
     setSession(null);
   }
+
+  useEffect(() => { onAuthExpired = handleLogout; }, []);
 
   if (!session) return <LoginScreen onLogin={handleLogin} />;
   return <InventarioProductoTerminado userEmail={session.email} onLogout={handleLogout} />;
