@@ -1558,64 +1558,7 @@ async function fetchImagePng(url) {
   return { dataUrl: canvas.toDataURL("image/png"), width: bitmap.width, height: bitmap.height };
 }
 
-function exportFichaExcel(diseno, form, composiciones, catalogs) {
-  const grid = fichaFieldGroups(diseno, form, catalogs);
-  const rows = [
-    ["INDUSTRIA TEXTIL DE NARIÑO SAS", "", "MOPA", "", "", "", ""],
-    ["", "", "FICHA TÉCNICA DISEÑO", "", "", "", ""],
-    ...grid.map(([[l1, v1], [l2, v2], [l3, v3]]) => [l1, v1, "", l2, v2, l3, v3]),
-    ["TIPO DE EMPAQUE:", form.tipoEmpaque || "", "", "", "", "", ""],
-    ["DESCRIPCIÓN PRENDA:", form.descripcionPrenda || "", "", "", "", "", ""],
-    ["FOTO:", form.fotoUrl || "—", "", "", "", "", ""],
-    ["MOLDE:", form.moldeArchivoUrl || "—", "", "", "", "", ""],
-    ["", "", "", "", "", "", ""],
-    ["COMPOSICIONES", "", "", "", "", "", ""],
-    ["CÓDIGO", "NOMBRE", "", "COLOR", "TIPO", "DESCRIPCIÓN", ""],
-    ...composiciones.map(c => [c.codigo || "", c.nombre || "", "", c.color || "", c.tipo || "", c.descripcion || "", ""]),
-    ["", "", "", "", "", "", ""],
-    [`ELABORADO POR: ${form.elaboradoPor || ""}`, "", "", "", "", "", ""],
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  ws["!cols"] = [{ wch: 20 }, { wch: 20 }, { wch: 3 }, { wch: 16 }, { wch: 16 }, { wch: 26 }, { wch: 3 }];
-
-  const merges = [
-    { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } }, // nombre empresa
-    { s: { r: 0, c: 2 }, e: { r: 0, c: 6 } }, // MOPA
-    { s: { r: 1, c: 2 }, e: { r: 1, c: 6 } }, // subtítulo
-  ];
-  // filas de la cuadrícula (SKU maestro...Banco de muestras): fusiona el valor de la 1ra columna (B:C)
-  grid.forEach((_, i) => merges.push({ s: { r: 2 + i, c: 1 }, e: { r: 2 + i, c: 2 } }));
-
-  const tipoRow = 2 + grid.length;      // Tipo de empaque
-  const descRow = tipoRow + 1;          // Descripción prenda
-  const fotoRow = descRow + 1;          // Foto
-  const moldeRow = fotoRow + 1;         // Molde
-  const compHeaderRow = moldeRow + 2;   // "COMPOSICIONES" (después de una fila en blanco)
-  const tableHeaderRow = compHeaderRow + 1;
-  const dataStart = tableHeaderRow + 1;
-  const dataEnd = dataStart + composiciones.length - 1;
-  const elaboradoRow = dataEnd + 2;     // después de una fila en blanco
-
-  [tipoRow, descRow, fotoRow, moldeRow].forEach(r => merges.push({ s: { r, c: 1 }, e: { r, c: 6 } }));
-  merges.push({ s: { r: compHeaderRow, c: 0 }, e: { r: compHeaderRow, c: 6 } });
-  merges.push({ s: { r: tableHeaderRow, c: 1 }, e: { r: tableHeaderRow, c: 2 } }); // NOMBRE
-  merges.push({ s: { r: tableHeaderRow, c: 5 }, e: { r: tableHeaderRow, c: 6 } }); // DESCRIPCIÓN
-  for (let r = dataStart; r <= dataEnd; r++) {
-    merges.push({ s: { r, c: 1 }, e: { r, c: 2 } });
-    merges.push({ s: { r, c: 5 }, e: { r, c: 6 } });
-  }
-  merges.push({ s: { r: elaboradoRow, c: 0 }, e: { r: elaboradoRow, c: 6 } });
-
-  ws["!merges"] = merges;
-  if (form.fotoUrl) ws[XLSX.utils.encode_cell({ r: fotoRow, c: 1 })].l = { Target: form.fotoUrl, Tooltip: "Ver foto" };
-  if (form.moldeArchivoUrl) ws[XLSX.utils.encode_cell({ r: moldeRow, c: 1 })].l = { Target: form.moldeArchivoUrl, Tooltip: "Descargar molde" };
-
-  XLSX.utils.book_append_sheet(wb, ws, "Ficha tecnica");
-  XLSX.writeFile(wb, `Ficha_tecnica_${diseno.masterCode}.xlsx`);
-}
-
-async function exportFichaPDF(diseno, form, composiciones, catalogs) {
+async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   const doc = new jsPDF();
   const pageW = doc.internal.pageSize.getWidth();
   const L = 14, R = pageW - 14;
@@ -1727,7 +1670,41 @@ async function exportFichaPDF(diseno, form, composiciones, catalogs) {
   box(L, R - L, 7, { fill: true });
   cellText(L, R - L, 7, `ELABORADO POR: ${form.elaboradoPor || "—"}`, { bold: true, size: 8 });
 
-  doc.save(`Ficha_tecnica_${diseno.masterCode}.pdf`);
+  return doc;
+}
+
+function PdfPreviewModal({ preview, onClose }) {
+  useEffect(() => () => URL.revokeObjectURL(preview.url), [preview.url]);
+
+  function handleDownload() {
+    if (!window.confirm(`¿Descargar "${preview.filename}"?`)) return;
+    const a = document.createElement("a");
+    a.href = preview.url;
+    a.download = preview.filename;
+    a.click();
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(27,36,48,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "90vw", height: "90vh", background: TOKENS.panel, borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderBottom: `1px solid ${TOKENS.border}`, flexShrink: 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif" }}>Vista previa — {preview.filename}</span>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+        <iframe src={preview.url} title="Vista previa PDF" style={{ flex: 1, border: "none", width: "100%" }} />
+        <div
+          onDoubleClick={handleDownload}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 0", flexShrink: 0,
+            borderTop: `1px solid ${TOKENS.border}`, background: TOKENS.bg, cursor: "pointer", userSelect: "none",
+          }}
+        >
+          <Download size={14} color={TOKENS.inkSoft} />
+          <span style={{ fontSize: 12.5, color: TOKENS.inkSoft, fontWeight: 600 }}>Doble clic aquí para descargar</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function CodeChip({ label, value }) {
@@ -2044,6 +2021,7 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   const [uploadingMolde, setUploadingMolde] = useState(false);
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [generandoPdf, setGenerandoPdf] = useState(false);
+  const [pdfPreview, setPdfPreview] = useState(null);
   const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
   const [descripcionTouched, setDescripcionTouched] = useState(false);
 
@@ -2174,17 +2152,26 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
           </select>
         </div>
         <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-          <button onClick={() => exportFichaExcel(diseno, form, composiciones, catalogs)} style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>
-            <Download size={13} /> Excel
-          </button>
           <button
             disabled={generandoPdf}
-            onClick={async () => { setGenerandoPdf(true); try { await exportFichaPDF(diseno, form, composiciones, catalogs); } catch (e) { alert("No se pudo generar el PDF: " + e.message); } finally { setGenerandoPdf(false); } }}
+            onClick={async () => {
+              setGenerandoPdf(true);
+              try {
+                const doc = await buildFichaPDF(diseno, form, composiciones, catalogs);
+                const url = URL.createObjectURL(doc.output("blob"));
+                setPdfPreview({ url, filename: `Ficha_tecnica_${diseno.masterCode}.pdf` });
+              } catch (e) {
+                alert("No se pudo generar el PDF: " + e.message);
+              } finally {
+                setGenerandoPdf(false);
+              }
+            }}
             style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, opacity: generandoPdf ? 0.6 : 1 }}
           >
-            {generandoPdf ? <Loader2 size={13} className="spin" /> : <Download size={13} />} {generandoPdf ? "Generando..." : "PDF"}
+            {generandoPdf ? <Loader2 size={13} className="spin" /> : <FileText size={13} />} {generandoPdf ? "Generando..." : "Ver ficha en PDF"}
           </button>
         </div>
+        {pdfPreview && <PdfPreviewModal preview={pdfPreview} onClose={() => setPdfPreview(null)} />}
         <div style={{ display: "flex", gap: 6 }}>
           <CodeChip label="Categoría" value={catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || diseno.codCategoria} />
           <CodeChip label="Segmento" value={catalogs.segmentos.find(c => c.cod === diseno.codSegmento)?.nombre || diseno.codSegmento} />
