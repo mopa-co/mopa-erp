@@ -4,7 +4,7 @@ import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool, FileText, Upload
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool, FileText, Upload, Image as ImageIcon
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -114,12 +114,12 @@ const disenoMaestroFromDB = (r) => ({
   patronista: r.patronista, disenador: r.disenador, fechaSolicitud: r.fecha_solicitud, fechaElaboracion: r.fecha_elaboracion,
   anioMuestrario: r.anio_muestrario, bancoMuestras: !!r.banco_muestras, replica: !!r.replica,
   tipoEmpaque: r.tipo_empaque, descripcionPrenda: r.descripcion_prenda, elaboradoPor: r.elaborado_por,
-  moldeArchivoUrl: r.molde_archivo_url, moldeArchivoNombre: r.molde_archivo_nombre,
+  moldeArchivoUrl: r.molde_archivo_url, moldeArchivoNombre: r.molde_archivo_nombre, fotoUrl: r.foto_url,
 });
 const composicionFromDB = (r) => ({ id: r.id, codigo: r.codigo, nombre: r.nombre, color: r.color, tipo: r.tipo, descripcion: r.descripcion });
 
-async function uploadMoldeFile(masterCode, file) {
-  const path = `${encodeURIComponent(masterCode)}/${Date.now()}_${encodeURIComponent(file.name)}`;
+async function uploadDisenoFile(masterCode, file, prefix) {
+  const path = `${encodeURIComponent(masterCode)}/${prefix}_${Date.now()}_${encodeURIComponent(file.name)}`;
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/moldes/${path}`, {
     method: "POST",
     headers: {
@@ -136,6 +136,8 @@ async function uploadMoldeFile(masterCode, file) {
   }
   return { url: `${SUPABASE_URL}/storage/v1/object/public/moldes/${path}`, nombre: file.name };
 }
+const uploadMoldeFile = (masterCode, file) => uploadDisenoFile(masterCode, file, "molde");
+const uploadFotoFile = (masterCode, file) => uploadDisenoFile(masterCode, file, "foto");
 
 function calcularCosteo(materiales, manoObra, asunciones, utilidadMayPersonalizada, utilidadDetPersonalizada) {
   const materiaPrimaTotal = materiales.reduce((a, m) => a + m.valorUnitario * m.cantidad, 0);
@@ -424,11 +426,13 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
           master_code: masterCode, cod_categoria: data.codCategoria, cod_segmento: data.codSegmento,
           cod_linea: data.codLinea, cod_diseno: data.codDiseno, consecutivo: data.consecutivo,
           nombre: data.nombre, temporada: data.temporada, estado: data.estado || "boceto",
-          prenda: data.prenda, molde: data.molde, linea_ficha: data.lineaFicha, talla_inicial: data.tallaInicial,
+          prenda: data.prenda, talla_inicial: data.tallaInicial,
           patronista: data.patronista, disenador: data.disenador,
           fecha_solicitud: data.fechaSolicitud || null, fecha_elaboracion: data.fechaElaboracion || null,
           anio_muestrario: data.anioMuestrario, banco_muestras: !!data.bancoMuestras, replica: !!data.replica,
           tipo_empaque: data.tipoEmpaque, descripcion_prenda: data.descripcionPrenda, elaborado_por: data.elaboradoPor,
+          molde_archivo_url: data.moldeArchivoUrl || null, molde_archivo_nombre: data.moldeArchivoNombre || null,
+          foto_url: data.fotoUrl || null,
         }),
       });
       const created = disenoMaestroFromDB(row);
@@ -1494,6 +1498,47 @@ const miniInput = {
   fontSize: 12, fontFamily: "inherit", outline: "none", background: TOKENS.panel, minWidth: 0,
 };
 
+function FotoThumb({ url, size = 44 }) {
+  return url ? (
+    <img src={url} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 7, border: `1px solid ${TOKENS.border}`, flexShrink: 0 }} />
+  ) : (
+    <div style={{
+      width: size, height: size, borderRadius: 7, border: `1px dashed ${TOKENS.border}`, flexShrink: 0,
+      display: "flex", alignItems: "center", justifyContent: "center", color: TOKENS.inkSoft,
+    }}><ImageIcon size={16} /></div>
+  );
+}
+
+function FileUploadField({ label, fileUrl, fileName, uploading, disabled, onChange, isImage }) {
+  return (
+    <div style={{ marginBottom: 12, flex: 1 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, marginBottom: 5 }}>{label}</div>
+      {fileUrl ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: TOKENS.bg, borderRadius: 7, padding: "6px 8px" }}>
+          {isImage ? <FotoThumb url={fileUrl} size={30} /> : <FileText size={15} color={TOKENS.inkSoft} style={{ flexShrink: 0 }} />}
+          {!isImage && (
+            <a href={fileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: TOKENS.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName || "Ver archivo"}</a>
+          )}
+          {isImage && <span style={{ fontSize: 12, color: TOKENS.inkSoft, flex: 1 }}>Cargada</span>}
+          <label style={{ fontSize: 10.5, color: TOKENS.amber, cursor: disabled ? "default" : "pointer", flexShrink: 0 }}>
+            {uploading ? "Subiendo..." : "Reemplazar"}
+            <input type="file" accept={isImage ? "image/*" : undefined} onChange={onChange} disabled={uploading || disabled} style={{ display: "none" }} />
+          </label>
+        </div>
+      ) : (
+        <label style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          border: `1px dashed ${TOKENS.inkSoft}`, borderRadius: 7, padding: "8px 0", fontSize: 11.5,
+          color: disabled ? "#B7BEC7" : TOKENS.inkSoft, cursor: disabled ? "default" : "pointer",
+        }}>
+          {uploading ? <Loader2 size={13} className="spin" /> : <Upload size={13} />} {uploading ? "Subiendo..." : disabled ? "Completa el código" : "Subir"}
+          <input type="file" accept={isImage ? "image/*" : undefined} onChange={onChange} disabled={uploading || disabled} style={{ display: "none" }} />
+        </label>
+      )}
+    </div>
+  );
+}
+
 function SkuSelect({ label, options, value, onChange, onAddNew }) {
   return (
     <div style={{ marginBottom: 12, flex: 1, minWidth: 0 }}>
@@ -1601,8 +1646,11 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
   const [consecutivo, setConsecutivo] = useState(lockedOrphan?.consecutivo || "");
   const [nombre, setNombre] = useState(lockedOrphan?.nombreSugerido || "");
   const [prenda, setPrenda] = useState("");
-  const [molde, setMolde] = useState("");
-  const [lineaFicha, setLineaFicha] = useState("");
+  const [moldeArchivoUrl, setMoldeArchivoUrl] = useState(null);
+  const [moldeArchivoNombre, setMoldeArchivoNombre] = useState(null);
+  const [fotoUrl, setFotoUrl] = useState(null);
+  const [uploadingMolde, setUploadingMolde] = useState(false);
+  const [uploadingFoto, setUploadingFoto] = useState(false);
   const [tallaInicial, setTallaInicial] = useState("");
   const [patronista, setPatronista] = useState("");
   const [disenador, setDisenador] = useState("");
@@ -1630,11 +1678,35 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
   async function submit() {
     setSaving(true);
     await onSave({
-      codCategoria, codSegmento, codLinea, codDiseno, consecutivo: consecPadded, nombre, prenda, molde, lineaFicha,
+      codCategoria, codSegmento, codLinea, codDiseno, consecutivo: consecPadded, nombre, prenda,
+      moldeArchivoUrl, moldeArchivoNombre, fotoUrl,
       tallaInicial, patronista, disenador, fechaSolicitud, fechaElaboracion, anioMuestrario, bancoMuestras, replica,
       tipoEmpaque, descripcionPrenda, elaboradoPor, estado: "boceto",
     });
     setSaving(false);
+  }
+
+  async function handleMoldeFile(e) {
+    const file = e.target.files?.[0];
+    if (!file || !masterCode) return;
+    setUploadingMolde(true);
+    try {
+      const { url, nombre: fname } = await uploadMoldeFile(masterCode, file);
+      setMoldeArchivoUrl(url);
+      setMoldeArchivoNombre(fname);
+    } catch (err) { alert(err.message); }
+    finally { setUploadingMolde(false); e.target.value = ""; }
+  }
+
+  async function handleFotoFile(e) {
+    const file = e.target.files?.[0];
+    if (!file || !masterCode) return;
+    setUploadingFoto(true);
+    try {
+      const { url } = await uploadFotoFile(masterCode, file);
+      setFotoUrl(url);
+    } catch (err) { alert(err.message); }
+    finally { setUploadingFoto(false); e.target.value = ""; }
   }
 
   return (
@@ -1648,9 +1720,12 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
         <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "0 0 14px" }}>El código maestro se arma solo. Usa el <Plus size={10} style={{ display: "inline", verticalAlign: -1 }} /> para agregar ítems nuevos al catálogo.</p>
       )}
       {lockedOrphan ? (
-        <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+          <FotoThumb url={fotoUrl} />
+          <div>
+            <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+          </div>
         </div>
       ) : (
         <>
@@ -1667,9 +1742,12 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
       )}
 
       {!lockedOrphan && masterCode && (
-        <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
-          <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+          <FotoThumb url={fotoUrl} />
+          <div>
+            <div style={{ fontSize: 10.5, color: TOKENS.inkSoft, marginBottom: 2 }}>CÓDIGO MAESTRO</div>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{masterCode}</div>
+          </div>
         </div>
       )}
 
@@ -1677,10 +1755,10 @@ function DisenoForm({ catalogs, suggestConsecutivo, onOpenCatalog, onSave, locke
         <Field label="Referencia"><input style={input} value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Chaqueta lateral" /></Field>
         <Field label="Prenda"><input style={input} value={prenda} onChange={e => setPrenda(e.target.value)} placeholder="Chaqueta" /></Field>
       </div>
-      <div style={{ display: "flex", gap: 10 }}>
-        <Field label="Molde"><input style={input} value={molde} onChange={e => setMolde(e.target.value)} /></Field>
-        <Field label="Línea (ficha)"><input style={input} value={lineaFicha} onChange={e => setLineaFicha(e.target.value)} placeholder="Unisex" /></Field>
-        <Field label="Talla inicial"><input style={input} value={tallaInicial} onChange={e => setTallaInicial(e.target.value)} placeholder="M" /></Field>
+      <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+        <FileUploadField label="Molde" fileUrl={moldeArchivoUrl} fileName={moldeArchivoNombre} uploading={uploadingMolde} disabled={!masterCode} onChange={handleMoldeFile} />
+        <FileUploadField label="Foto" fileUrl={fotoUrl} fileName={fotoUrl ? "Foto de la prenda" : null} uploading={uploadingFoto} disabled={!masterCode} onChange={handleFotoFile} isImage />
+        <Field label="Colección"><input style={input} value={tallaInicial} onChange={e => setTallaInicial(e.target.value)} placeholder="2026-I" /></Field>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
         <Field label="Patronista"><input style={input} value={patronista} onChange={e => setPatronista(e.target.value)} /></Field>
@@ -1720,6 +1798,7 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingMolde, setUploadingMolde] = useState(false);
+  const [uploadingFoto, setUploadingFoto] = useState(false);
   const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
 
   useEffect(() => { setForm(diseno); }, [diseno?.masterCode]);
@@ -1752,10 +1831,26 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
     }
   }
 
+  async function handleFotoFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFoto(true);
+    try {
+      const { url } = await uploadFotoFile(diseno.masterCode, file);
+      await onUpdate(diseno.masterCode, { foto_url: url });
+      setForm(f => ({ ...f, fotoUrl: url }));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setUploadingFoto(false);
+      e.target.value = "";
+    }
+  }
+
   async function guardar() {
     setSaving(true);
     await onUpdate(diseno.masterCode, {
-      nombre: form.nombre, prenda: form.prenda, molde: form.molde, linea_ficha: form.lineaFicha, talla_inicial: form.tallaInicial,
+      nombre: form.nombre, prenda: form.prenda, talla_inicial: form.tallaInicial,
       patronista: form.patronista, disenador: form.disenador, fecha_solicitud: form.fechaSolicitud || null, fecha_elaboracion: form.fechaElaboracion || null,
       anio_muestrario: form.anioMuestrario, banco_muestras: !!form.bancoMuestras, replica: !!form.replica,
       tipo_empaque: form.tipoEmpaque, descripcion_prenda: form.descripcionPrenda, elaborado_por: form.elaboradoPor, estado: form.estado,
@@ -1782,7 +1877,10 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
   return (
     <div>
       <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{diseno.masterCode}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <FotoThumb url={form.fotoUrl} />
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 700 }}>{diseno.masterCode}</div>
+        </div>
         <select style={{ ...input, width: 140 }} value={form.estado} onChange={set("estado")}>
           <option value="boceto">Boceto</option>
           <option value="desarrollo">En desarrollo</option>
@@ -1796,31 +1894,9 @@ function FichaTecnicaEditor({ diseno, onUpdate }) {
         <Field label="Prenda"><input style={input} value={form.prenda || ""} onChange={set("prenda")} /></Field>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
-        <Field label="Molde"><input style={input} value={form.molde || ""} onChange={set("molde")} /></Field>
-        <Field label="Línea (ficha)"><input style={input} value={form.lineaFicha || ""} onChange={set("lineaFicha")} /></Field>
-        <Field label="Talla inicial"><input style={input} value={form.tallaInicial || ""} onChange={set("tallaInicial")} /></Field>
-      </div>
-
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, marginBottom: 5 }}>Archivo del molde (.pds u otro)</div>
-        {form.moldeArchivoUrl ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, background: TOKENS.bg, borderRadius: 7, padding: "8px 10px" }}>
-            <FileText size={15} color={TOKENS.inkSoft} style={{ flexShrink: 0 }} />
-            <a href={form.moldeArchivoUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: TOKENS.ink, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{form.moldeArchivoNombre || "Descargar archivo"}</a>
-            <label style={{ fontSize: 11, color: TOKENS.amber, cursor: "pointer", flexShrink: 0 }}>
-              {uploadingMolde ? "Subiendo..." : "Reemplazar"}
-              <input type="file" onChange={handleMoldeFile} disabled={uploadingMolde} style={{ display: "none" }} />
-            </label>
-          </div>
-        ) : (
-          <label style={{
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: `1px dashed ${TOKENS.inkSoft}`,
-            borderRadius: 7, padding: "10px 0", fontSize: 12.5, color: TOKENS.inkSoft, cursor: "pointer",
-          }}>
-            {uploadingMolde ? <Loader2 size={14} className="spin" /> : <Upload size={14} />} {uploadingMolde ? "Subiendo..." : "Subir archivo del molde"}
-            <input type="file" onChange={handleMoldeFile} disabled={uploadingMolde} style={{ display: "none" }} />
-          </label>
-        )}
+        <FileUploadField label="Molde" fileUrl={form.moldeArchivoUrl} fileName={form.moldeArchivoNombre} uploading={uploadingMolde} onChange={handleMoldeFile} />
+        <FileUploadField label="Foto" fileUrl={form.fotoUrl} fileName="Foto de la prenda" uploading={uploadingFoto} onChange={handleFotoFile} isImage />
+        <Field label="Colección"><input style={input} value={form.tallaInicial || ""} onChange={set("tallaInicial")} /></Field>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
         <Field label="Patronista"><input style={input} value={form.patronista || ""} onChange={set("patronista")} /></Field>
