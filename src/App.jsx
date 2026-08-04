@@ -1565,6 +1565,10 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   const FILL = [225, 232, 242];
   let y = 14;
 
+  const MM_PER_PT = 25.4 / 72;
+  function lineHeightMM(size) {
+    return size * MM_PER_PT * 1.15; // 1.15 = lineHeightFactor por defecto de jsPDF
+  }
   function box(x, w, h, opts = {}) {
     if (opts.fill) doc.setFillColor(...FILL);
     doc.setDrawColor(90, 100, 115);
@@ -1583,10 +1587,14 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     doc.text(String(text ?? "—"), tx, y + h / 2 + size * 0.12, { align, maxWidth: w - pad * 2 });
   }
   // Celda multilínea, alineada arriba, para textos que pueden ocupar más de 1 renglón
-  function cellLines(x, w, h, textLines, { bold, size = 7.2, pad = 1.6, lineH = 3.1 } = {}) {
+  function cellLines(x, w, h, textLines, { bold, size = 7.2, pad = 1.8 } = {}) {
     doc.setFont(undefined, bold ? "bold" : "normal");
     doc.setFontSize(size);
-    doc.text(textLines, x + pad, y + pad + size * 0.09 + 1.6, { lineHeightFactor: lineH / size });
+    doc.text(textLines, x + pad, y + pad + size * MM_PER_PT * 0.85);
+  }
+  // Alto necesario para una celda con N líneas a un tamaño dado
+  function neededH(numLines, size, pad = 1.8) {
+    return pad * 2 + numLines * lineHeightMM(size);
   }
   function newPageIfNeeded(needed) {
     if (y + needed > 285) { doc.addPage(); y = 14; }
@@ -1613,8 +1621,11 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
       labelLines: lines(label, blocks[i].labelW - 3, LBL_SIZE),
       valueLines: lines(value, blocks[i].valueW - 3, VAL_SIZE),
     }));
-    const maxLines = Math.max(...cellLinesData.map(c => Math.max(c.labelLines.length, c.valueLines.length)));
-    const rH = Math.max(7, 3.4 + maxLines * 3.3);
+    const rH = Math.max(
+      7,
+      ...cellLinesData.map(c => neededH(c.labelLines.length, LBL_SIZE)),
+      ...cellLinesData.map(c => neededH(c.valueLines.length, VAL_SIZE)),
+    );
     row.forEach(([label], i) => {
       const { x, labelW, valueW } = blocks[i];
       box(x, labelW, rH, { fill: true });
@@ -1627,7 +1638,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
 
   // --- Tipo de empaque ---
   const tipoLines = lines(form.tipoEmpaque, R - L - 40, 7.3);
-  const tipoH = Math.max(7, 3.4 + tipoLines.length * 3.3);
+  const tipoH = Math.max(7, neededH(tipoLines.length, 7.3));
   box(L, 36, tipoH, { fill: true });
   cellText(L, 36, tipoH, "TIPO DE EMPAQUE:", { bold: true, size: 6.5 });
   box(L + 36, R - L - 36, tipoH);
@@ -1636,7 +1647,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
 
   // --- Descripción prenda ---
   const descSplit = lines(form.descripcionPrenda, R - L - 4, 7.3);
-  const descH = Math.max(7, 3.4 + descSplit.length * 3.3);
+  const descH = Math.max(7, neededH(descSplit.length, 7.3));
   box(L, R - L, 5, { fill: true });
   cellText(L, R - L, 5, "DESCRIPCIÓN PRENDA:", { bold: true, size: 6.5 });
   y += 5;
@@ -1679,7 +1690,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   }
   composiciones.forEach(c => {
     const colLines = compCols.map(col => lines(c[col.key], col.w - 3, 7));
-    const rH = Math.max(7, 3.4 + Math.max(...colLines.map(l => l.length)) * 3.3);
+    const rH = Math.max(7, neededH(Math.max(...colLines.map(l => l.length)), 7));
     newPageIfNeeded(rH);
     compCols.forEach((col, i) => { box(col.x, col.w, rH); cellLines(col.x, col.w, rH, colLines[i], { size: 7 }); });
     y += rH;
