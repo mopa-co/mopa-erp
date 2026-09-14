@@ -2296,7 +2296,7 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
   const [procesos, setProcesos] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [consForm, setConsForm] = useState({ codTalla: "", insumo: "", unidad: "", cantidad: "" });
+  const [consForm, setConsForm] = useState({ insumo: "", unidad: "", cantidad: "" });
   const [editingConsId, setEditingConsId] = useState(null);
 
   const [procForm, setProcForm] = useState({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
@@ -2321,16 +2321,16 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
 
   function startEditConsumo(c) {
     setEditingConsId(c.id);
-    setConsForm({ codTalla: c.codTalla, insumo: c.insumo, unidad: c.unidad || "", cantidad: String(c.cantidad) });
+    setConsForm({ insumo: c.insumo, unidad: c.unidad || "", cantidad: String(c.cantidad) });
   }
   function cancelEditConsumo() {
     setEditingConsId(null);
-    setConsForm({ codTalla: "", insumo: "", unidad: "", cantidad: "" });
+    setConsForm({ insumo: "", unidad: "", cantidad: "" });
   }
   async function submitConsumo() {
-    if (!consForm.codTalla || !consForm.insumo.trim() || consForm.cantidad === "") return;
+    if (!consForm.insumo.trim() || consForm.cantidad === "") return;
     if (editingConsId && !window.confirm(`¿Guardar los cambios en "${consForm.insumo}"?`)) return;
-    const body = { master_code: diseno.masterCode, cod_talla: consForm.codTalla, insumo: consForm.insumo, unidad: consForm.unidad, cantidad: Number(consForm.cantidad) || 0 };
+    const body = { master_code: diseno.masterCode, insumo: consForm.insumo, unidad: consForm.unidad, cantidad: Number(consForm.cantidad) || 0 };
     try {
       if (editingConsId) {
         const [row] = await sb(`produccion_consumos?id=eq.${editingConsId}`, { method: "PATCH", body: JSON.stringify(body) });
@@ -2388,23 +2388,18 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
         <div style={{ fontSize: 12, color: TOKENS.inkSoft, marginTop: 2 }}>{diseno.nombre}</div>
       </div>
 
-      {/* Consumo de materiales por talla */}
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Consumo de materiales por talla</div>
+      {/* Consumo de materiales (promedio por referencia) */}
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Consumo de materiales (promedio por referencia)</div>
       {consumos.map(c => (
         <LineItemRow key={c.id} onDelete={() => deleteConsumo(c.id, c.insumo)} onEdit={() => startEditConsumo(c)} fields={[
-          { value: c.codTalla, flex: 0.6, mono: true },
-          { value: c.insumo, flex: 1.6 },
+          { value: c.insumo, flex: 1.8 },
           { value: `${c.cantidad} ${c.unidad || ""}`.trim(), flex: 1, mono: true, muted: true },
         ]} />
       ))}
       {consumos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin consumos agregados.</div>}
       {editingConsId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando consumo...</div>}
       <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 20, flexWrap: "wrap" }}>
-        <select style={{ ...miniInput, flex: "0 0 80px" }} value={consForm.codTalla} onChange={e => setConsForm(f => ({ ...f, codTalla: e.target.value }))}>
-          <option value="">Talla</option>
-          {catalogs.tallas.map(t => <option key={t.cod} value={t.cod}>{t.cod}</option>)}
-        </select>
-        <input style={{ ...miniInput, flex: 1.6 }} placeholder="Insumo (ej. Cierre metálico)" value={consForm.insumo} onChange={e => setConsForm(f => ({ ...f, insumo: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1.8 }} placeholder="Insumo (ej. Cierre metálico)" value={consForm.insumo} onChange={e => setConsForm(f => ({ ...f, insumo: e.target.value }))} />
         <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" step="any" min="0" placeholder="Cant." value={consForm.cantidad} onChange={e => setConsForm(f => ({ ...f, cantidad: e.target.value }))} />
         <input style={{ ...miniInput, flex: "0 0 70px" }} placeholder="Unidad" value={consForm.unidad} onChange={e => setConsForm(f => ({ ...f, unidad: e.target.value }))} />
         <button onClick={submitConsumo} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingConsId ? <Pencil size={13} /> : <Plus size={14} />}</button>
