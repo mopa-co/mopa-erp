@@ -287,7 +287,6 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
   const [qrFor, setQrFor] = useState(null);
   const [disenosMaestros, setDisenosMaestros] = useState([]);
   const [showDiseno, setShowDiseno] = useState(false);
-  const [showInsumosProduccion, setShowInsumosProduccion] = useState(false);
 
   async function loadAll() {
     setLoading(true);
@@ -635,7 +634,6 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
           <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15 }}>MOPA</span>
         </div>
         <NavItem icon={<PenTool size={16} />} label="Diseño y Desarrollo" onClick={() => setShowDiseno(true)} />
-        <NavItem icon={<ClipboardList size={16} />} label="Insumos y Producción" onClick={() => setShowInsumosProduccion(true)} />
         <NavItem icon={<Package size={16} />} label="Inventario" active />
         <NavItem icon={<Factory size={16} />} label="Producción" onClick={() => setShowProduccion(true)} />
         <NavItem icon={<ArrowDownCircle size={16} />} label="Compras" disabled />
@@ -797,13 +795,6 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
           suggestConsecutivo={nextConsecutivoDiseno}
           onOpenCatalog={(key) => setCatalogModalTab(key)}
           onClose={() => setShowDiseno(false)}
-        />
-      )}
-      {showInsumosProduccion && (
-        <InsumosProduccionModule
-          disenosMaestros={disenosMaestros}
-          catalogs={catalogs}
-          onClose={() => setShowInsumosProduccion(false)}
         />
       )}
     </div>
@@ -2066,6 +2057,7 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   const [pdfPreview, setPdfPreview] = useState(null);
   const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
   const [descripcionTouched, setDescripcionTouched] = useState(false);
+  const [tab, setTab] = useState("ficha");
 
   useEffect(() => { setForm(diseno); }, [diseno?.masterCode]);
 
@@ -2223,6 +2215,15 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
         </div>
       </div>
 
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: `1px solid ${TOKENS.border}` }}>
+        <TabBtn active={tab === "ficha"} onClick={() => setTab("ficha")} icon={<FileText size={14} />}>Ficha técnica</TabBtn>
+        <TabBtn active={tab === "insumos"} onClick={() => setTab("insumos")} icon={<ClipboardList size={14} />}>Insumos y Producción</TabBtn>
+      </div>
+
+      {tab === "insumos" && <InsumosProduccionPanel diseno={diseno} catalogs={catalogs} />}
+
+      {tab === "ficha" && (
+        <>
       <div style={{ display: "flex", gap: 10 }}>
         <FileUploadField label="Molde" fileUrl={form.moldeArchivoUrl} fileName={form.moldeArchivoNombre} uploading={uploadingMolde} onChange={handleMoldeFile} />
         <FileUploadField label="Foto" fileUrl={form.fotoUrl} fileName="Foto de la prenda" uploading={uploadingFoto} onChange={handleFotoFile} isImage />
@@ -2284,58 +2285,9 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
           </div>
         </>
       )}
+        </>
+      )}
     </div>
-  );
-}
-
-function InsumosProduccionModule({ disenosMaestros, catalogs, onClose }) {
-  const [selectedCode, setSelectedCode] = useState(null);
-
-  return (
-    <ModalCenter onClose={onClose} width={860}>
-      <div style={{ padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
-          <div>
-            <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Insumos y Producción</h3>
-            <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 0" }}>Consumo de materiales por talla y tiempos/procesos de producción, por diseño.</p>
-          </div>
-          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
-        </div>
-
-        <div style={{ display: "flex", gap: 14 }}>
-          <div style={{ width: 220, flexShrink: 0 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Diseños</div>
-            <div style={{ maxHeight: 480, overflowY: "auto" }}>
-              {disenosMaestros.length === 0 && <div style={{ fontSize: 12, color: TOKENS.inkSoft, padding: "8px 0" }}>Crea un diseño primero en "Diseño y Desarrollo".</div>}
-              {disenosMaestros.map(d => (
-                <div key={d.masterCode} onClick={() => setSelectedCode(d.masterCode)} style={{
-                  border: `1px solid ${selectedCode === d.masterCode ? TOKENS.amber : TOKENS.border}`,
-                  background: selectedCode === d.masterCode ? TOKENS.amberSoft : TOKENS.panel,
-                  borderRadius: 7, padding: "8px 9px", marginBottom: 8, cursor: "pointer",
-                }}>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 600 }}>{d.masterCode}</div>
-                  <div style={{ fontSize: 11.5, marginTop: 2 }}>{d.nombre}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ flex: 1, minWidth: 0, maxHeight: 520, overflowY: "auto", paddingRight: 4 }}>
-            {!selectedCode && (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: 200, color: TOKENS.inkSoft, fontSize: 13 }}>
-                Elige un diseño de la lista para ver o capturar sus insumos y procesos.
-              </div>
-            )}
-            {selectedCode && (
-              <InsumosProduccionPanel
-                diseno={disenosMaestros.find(d => d.masterCode === selectedCode)}
-                catalogs={catalogs}
-              />
-            )}
-          </div>
-        </div>
-      </div>
-    </ModalCenter>
   );
 }
 
