@@ -5,7 +5,7 @@ import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool, FileText, Upload, Image as ImageIcon
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool, FileText, Upload, Image as ImageIcon, ClipboardList
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -151,6 +151,8 @@ const disenoMaestroFromDB = (r) => ({
   moldeArchivoUrl: r.molde_archivo_url, moldeArchivoNombre: r.molde_archivo_nombre, fotoUrl: r.foto_url,
 });
 const composicionFromDB = (r) => ({ id: r.id, codigo: r.codigo, nombre: r.nombre, color: r.color, tipo: r.tipo, descripcion: r.descripcion });
+const consumoFromDB = (r) => ({ id: r.id, codTalla: r.cod_talla, insumo: r.insumo, unidad: r.unidad, cantidad: Number(r.cantidad) || 0 });
+const procesoFromDB = (r) => ({ id: r.id, proceso: r.proceso, area: r.area, tiempoMinutos: Number(r.tiempo_minutos) || 0, notas: r.notas, orden: r.orden });
 
 async function uploadDisenoFile(masterCode, file, prefix) {
   const path = `${encodeURIComponent(masterCode)}/${prefix}_${Date.now()}_${encodeURIComponent(file.name)}`;
@@ -285,6 +287,7 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
   const [qrFor, setQrFor] = useState(null);
   const [disenosMaestros, setDisenosMaestros] = useState([]);
   const [showDiseno, setShowDiseno] = useState(false);
+  const [showInsumosProduccion, setShowInsumosProduccion] = useState(false);
 
   async function loadAll() {
     setLoading(true);
@@ -632,6 +635,7 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
           <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15 }}>MOPA</span>
         </div>
         <NavItem icon={<PenTool size={16} />} label="Diseño y Desarrollo" onClick={() => setShowDiseno(true)} />
+        <NavItem icon={<ClipboardList size={16} />} label="Insumos y Producción" onClick={() => setShowInsumosProduccion(true)} />
         <NavItem icon={<Package size={16} />} label="Inventario" active />
         <NavItem icon={<Factory size={16} />} label="Producción" onClick={() => setShowProduccion(true)} />
         <NavItem icon={<ArrowDownCircle size={16} />} label="Compras" disabled />
@@ -793,6 +797,13 @@ function InventarioProductoTerminado({ userEmail, onLogout }) {
           suggestConsecutivo={nextConsecutivoDiseno}
           onOpenCatalog={(key) => setCatalogModalTab(key)}
           onClose={() => setShowDiseno(false)}
+        />
+      )}
+      {showInsumosProduccion && (
+        <InsumosProduccionModule
+          disenosMaestros={disenosMaestros}
+          catalogs={catalogs}
+          onClose={() => setShowInsumosProduccion(false)}
         />
       )}
     </div>
@@ -2273,6 +2284,206 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function InsumosProduccionModule({ disenosMaestros, catalogs, onClose }) {
+  const [selectedCode, setSelectedCode] = useState(null);
+
+  return (
+    <ModalCenter onClose={onClose} width={860}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
+          <div>
+            <h3 style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, margin: 0 }}>Insumos y Producción</h3>
+            <p style={{ fontSize: 12, color: TOKENS.inkSoft, margin: "2px 0 0" }}>Consumo de materiales por talla y tiempos/procesos de producción, por diseño.</p>
+          </div>
+          <button onClick={onClose} style={{ ...iconBtn, border: "none" }}><X size={16} /></button>
+        </div>
+
+        <div style={{ display: "flex", gap: 14 }}>
+          <div style={{ width: 220, flexShrink: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Diseños</div>
+            <div style={{ maxHeight: 480, overflowY: "auto" }}>
+              {disenosMaestros.length === 0 && <div style={{ fontSize: 12, color: TOKENS.inkSoft, padding: "8px 0" }}>Crea un diseño primero en "Diseño y Desarrollo".</div>}
+              {disenosMaestros.map(d => (
+                <div key={d.masterCode} onClick={() => setSelectedCode(d.masterCode)} style={{
+                  border: `1px solid ${selectedCode === d.masterCode ? TOKENS.amber : TOKENS.border}`,
+                  background: selectedCode === d.masterCode ? TOKENS.amberSoft : TOKENS.panel,
+                  borderRadius: 7, padding: "8px 9px", marginBottom: 8, cursor: "pointer",
+                }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, fontWeight: 600 }}>{d.masterCode}</div>
+                  <div style={{ fontSize: 11.5, marginTop: 2 }}>{d.nombre}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0, maxHeight: 520, overflowY: "auto", paddingRight: 4 }}>
+            {!selectedCode && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: 200, color: TOKENS.inkSoft, fontSize: 13 }}>
+                Elige un diseño de la lista para ver o capturar sus insumos y procesos.
+              </div>
+            )}
+            {selectedCode && (
+              <InsumosProduccionPanel
+                diseno={disenosMaestros.find(d => d.masterCode === selectedCode)}
+                catalogs={catalogs}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </ModalCenter>
+  );
+}
+
+function InsumosProduccionPanel({ diseno, catalogs }) {
+  const [consumos, setConsumos] = useState([]);
+  const [procesos, setProcesos] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [consForm, setConsForm] = useState({ codTalla: "", insumo: "", unidad: "", cantidad: "" });
+  const [editingConsId, setEditingConsId] = useState(null);
+
+  const [procForm, setProcForm] = useState({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
+  const [editingProcId, setEditingProcId] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [consRows, procRows] = await Promise.all([
+        sb(`produccion_consumos?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=created_at.asc`, { method: "GET" }),
+        sb(`produccion_procesos?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=orden.asc,created_at.asc`, { method: "GET" }),
+      ]);
+      setConsumos(consRows.map(consumoFromDB));
+      setProcesos(procRows.map(procesoFromDB));
+    } catch (e) {
+      alert("No se pudo cargar la información: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, [diseno?.masterCode]);
+
+  function startEditConsumo(c) {
+    setEditingConsId(c.id);
+    setConsForm({ codTalla: c.codTalla, insumo: c.insumo, unidad: c.unidad || "", cantidad: String(c.cantidad) });
+  }
+  function cancelEditConsumo() {
+    setEditingConsId(null);
+    setConsForm({ codTalla: "", insumo: "", unidad: "", cantidad: "" });
+  }
+  async function submitConsumo() {
+    if (!consForm.codTalla || !consForm.insumo.trim() || consForm.cantidad === "") return;
+    if (editingConsId && !window.confirm(`¿Guardar los cambios en "${consForm.insumo}"?`)) return;
+    const body = { master_code: diseno.masterCode, cod_talla: consForm.codTalla, insumo: consForm.insumo, unidad: consForm.unidad, cantidad: Number(consForm.cantidad) || 0 };
+    try {
+      if (editingConsId) {
+        const [row] = await sb(`produccion_consumos?id=eq.${editingConsId}`, { method: "PATCH", body: JSON.stringify(body) });
+        setConsumos(prev => prev.map(c => c.id === editingConsId ? consumoFromDB(row) : c));
+      } else {
+        const [row] = await sb("produccion_consumos", { method: "POST", body: JSON.stringify(body) });
+        setConsumos(prev => [...prev, consumoFromDB(row)]);
+      }
+      cancelEditConsumo();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+  }
+  async function deleteConsumo(id, insumo) {
+    if (!window.confirm(`¿Eliminar "${insumo}"? Esta acción no se puede deshacer.`)) return;
+    try { await sb(`produccion_consumos?id=eq.${id}`, { method: "DELETE" }); setConsumos(prev => prev.filter(c => c.id !== id)); if (editingConsId === id) cancelEditConsumo(); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  function startEditProceso(p) {
+    setEditingProcId(p.id);
+    setProcForm({ proceso: p.proceso, area: p.area || "", tiempoMinutos: String(p.tiempoMinutos), notas: p.notas || "" });
+  }
+  function cancelEditProceso() {
+    setEditingProcId(null);
+    setProcForm({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
+  }
+  async function submitProceso() {
+    if (!procForm.proceso.trim() || procForm.tiempoMinutos === "") return;
+    if (editingProcId && !window.confirm(`¿Guardar los cambios en "${procForm.proceso}"?`)) return;
+    const body = { master_code: diseno.masterCode, proceso: procForm.proceso, area: procForm.area, tiempo_minutos: Number(procForm.tiempoMinutos) || 0, notas: procForm.notas, orden: procesos.length };
+    try {
+      if (editingProcId) {
+        const [row] = await sb(`produccion_procesos?id=eq.${editingProcId}`, { method: "PATCH", body: JSON.stringify(body) });
+        setProcesos(prev => prev.map(p => p.id === editingProcId ? procesoFromDB(row) : p));
+      } else {
+        const [row] = await sb("produccion_procesos", { method: "POST", body: JSON.stringify(body) });
+        setProcesos(prev => [...prev, procesoFromDB(row)]);
+      }
+      cancelEditProceso();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+  }
+  async function deleteProceso(id, proceso) {
+    if (!window.confirm(`¿Eliminar "${proceso}"? Esta acción no se puede deshacer.`)) return;
+    try { await sb(`produccion_procesos?id=eq.${id}`, { method: "DELETE" }); setProcesos(prev => prev.filter(p => p.id !== id)); if (editingProcId === id) cancelEditProceso(); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  const tiempoTotal = procesos.reduce((a, p) => a + p.tiempoMinutos, 0);
+
+  if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700 }}>{diseno.masterCode}</div>
+        <div style={{ fontSize: 12, color: TOKENS.inkSoft, marginTop: 2 }}>{diseno.nombre}</div>
+      </div>
+
+      {/* Consumo de materiales por talla */}
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Consumo de materiales por talla</div>
+      {consumos.map(c => (
+        <LineItemRow key={c.id} onDelete={() => deleteConsumo(c.id, c.insumo)} onEdit={() => startEditConsumo(c)} fields={[
+          { value: c.codTalla, flex: 0.6, mono: true },
+          { value: c.insumo, flex: 1.6 },
+          { value: `${c.cantidad} ${c.unidad || ""}`.trim(), flex: 1, mono: true, muted: true },
+        ]} />
+      ))}
+      {consumos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin consumos agregados.</div>}
+      {editingConsId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando consumo...</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        <select style={{ ...miniInput, flex: "0 0 80px" }} value={consForm.codTalla} onChange={e => setConsForm(f => ({ ...f, codTalla: e.target.value }))}>
+          <option value="">Talla</option>
+          {catalogs.tallas.map(t => <option key={t.cod} value={t.cod}>{t.cod}</option>)}
+        </select>
+        <input style={{ ...miniInput, flex: 1.6 }} placeholder="Insumo (ej. Cierre metálico)" value={consForm.insumo} onChange={e => setConsForm(f => ({ ...f, insumo: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" step="any" min="0" placeholder="Cant." value={consForm.cantidad} onChange={e => setConsForm(f => ({ ...f, cantidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 70px" }} placeholder="Unidad" value={consForm.unidad} onChange={e => setConsForm(f => ({ ...f, unidad: e.target.value }))} />
+        <button onClick={submitConsumo} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingConsId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingConsId && <button onClick={cancelEditConsumo} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
+      </div>
+
+      {/* Tiempos y procesos de producción */}
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Tiempos y procesos de producción</div>
+      {procesos.map(p => (
+        <LineItemRow key={p.id} onDelete={() => deleteProceso(p.id, p.proceso)} onEdit={() => startEditProceso(p)} fields={[
+          { value: p.proceso, flex: 1.3 },
+          { value: p.area || "—", flex: 1, muted: true },
+          { value: p.notas || "—", flex: 1.4, muted: true },
+          { value: `${p.tiempoMinutos} min`, flex: 0.8, mono: true },
+        ]} />
+      ))}
+      {procesos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin procesos agregados.</div>}
+      {editingProcId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando proceso...</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Proceso (ej. Corte)" value={procForm.proceso} onChange={e => setProcForm(f => ({ ...f, proceso: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1 }} placeholder="Área / responsable" value={procForm.area} onChange={e => setProcForm(f => ({ ...f, area: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Notas" value={procForm.notas} onChange={e => setProcForm(f => ({ ...f, notas: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" step="any" min="0" placeholder="Minutos" value={procForm.tiempoMinutos} onChange={e => setProcForm(f => ({ ...f, tiempoMinutos: e.target.value }))} />
+        <button onClick={submitProceso} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingProcId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingProcId && <button onClick={cancelEditProceso} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
+      </div>
+
+      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: TOKENS.inkSoft }}>Tiempo total de producción</span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 700 }}>{tiempoTotal} min</span>
+      </div>
     </div>
   );
 }
