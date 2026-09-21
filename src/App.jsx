@@ -2443,9 +2443,172 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
         {editingProcId && <button onClick={cancelEditProceso} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
       </div>
 
-      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <span style={{ fontSize: 12.5, fontWeight: 600, color: TOKENS.inkSoft }}>Tiempo total de producción</span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 700 }}>{tiempoTotal} min</span>
+      </div>
+
+      <GenericBomSection
+        title="Entretelas"
+        masterCode={diseno.masterCode}
+        table="produccion_entretelas"
+        fields={[
+          { key: "codigo", dbKey: "codigo", label: "Código", inputFlex: "0 0 90px", flex: 0.7, mono: true },
+          { key: "descripcion", dbKey: "descripcion_composicion", label: "Descripción / Composición", placeholder: "Descripción / Composición", required: true, inputFlex: "1.6 1 160px", flex: 1.6 },
+          { key: "observaciones", dbKey: "observaciones", label: "Observaciones", inputFlex: "1.2 1 140px", flex: 1.2, muted: true },
+        ]}
+      />
+
+      <GenericBomSection
+        title="Hilos e hilazas"
+        masterCode={diseno.masterCode}
+        table="produccion_hilos"
+        fields={[
+          { key: "codigo", dbKey: "codigo", label: "Código", inputFlex: "0 0 80px", flex: 0.6, mono: true },
+          { key: "tipoInsumo", dbKey: "tipo_insumo", label: "Tipo de insumo", placeholder: "Tipo de insumo", required: true, inputFlex: "1 1 110px", flex: 1 },
+          { key: "descripcion", dbKey: "descripcion", label: "Descripción", inputFlex: "1.2 1 120px", flex: 1.2 },
+          { key: "color", dbKey: "color", label: "Color", inputFlex: "0 0 90px", flex: 0.7, muted: true },
+          { key: "consumo", dbKey: "consumo", label: "Consumo", type: "number", inputFlex: "0 0 70px", flex: 0.6, mono: true, muted: true },
+          { key: "unidad", dbKey: "unidad", label: "Unidad", inputFlex: "0 0 70px", flex: 0.5, muted: true },
+          { key: "observaciones", dbKey: "observaciones", label: "Observaciones", inputFlex: "1 1 110px", flex: 1, muted: true },
+        ]}
+      />
+
+      <GenericBomSection
+        title="Procesos de confección"
+        masterCode={diseno.masterCode}
+        table="produccion_procesos_confeccion"
+        fields={[
+          { key: "codigo", dbKey: "codigo", label: "Código", inputFlex: "0 0 80px", flex: 0.6, mono: true },
+          { key: "tipoPreparacion", dbKey: "tipo_preparacion", label: "Tipo / Insumo", placeholder: "Tipo / Insumo (ej. Hilo Sol calibre 120)", required: true, inputFlex: "1.4 1 150px", flex: 1.4 },
+          { key: "descripcion", dbKey: "descripcion", label: "Proceso", placeholder: "Proceso (ej. Pespuntes, Filete)", inputFlex: "1 1 110px", flex: 1 },
+          { key: "observaciones", dbKey: "observaciones", label: "Observaciones", placeholder: "Observaciones (ej. tono a tono)", inputFlex: "1.2 1 130px", flex: 1.2, muted: true },
+        ]}
+      />
+
+      <GenericBomSection
+        title="Procesos especiales (estampado, bordado)"
+        masterCode={diseno.masterCode}
+        table="produccion_procesos_especiales"
+        fields={[
+          { key: "codigo", dbKey: "codigo", label: "Código", inputFlex: "0 0 80px", flex: 0.6, mono: true },
+          { key: "tipoPreparacion", dbKey: "tipo_preparacion", label: "Tipo / Insumo", placeholder: "Tipo / Insumo (ej. Hilosol calibre 120)", required: true, inputFlex: "1.4 1 150px", flex: 1.4 },
+          { key: "descripcion", dbKey: "descripcion", label: "Proceso", placeholder: "Proceso (ej. Marquillas)", inputFlex: "1 1 110px", flex: 1 },
+          { key: "observaciones", dbKey: "observaciones", label: "Observaciones", placeholder: "Observaciones (ej. tono a tono)", inputFlex: "1.2 1 130px", flex: 1.2, muted: true },
+        ]}
+      />
+
+      <GenericBomSection
+        title="Instrucciones de costura"
+        masterCode={diseno.masterCode}
+        table="produccion_instrucciones_costura"
+        fields={[
+          { key: "maquina", dbKey: "maquina", label: "Máquina", placeholder: "Máquina (ej. Plana 1 aguja)", required: true, inputFlex: "1.2 1 130px", flex: 1.2 },
+          { key: "ppp", dbKey: "ppp", label: "PPP", placeholder: "Puntadas por pulgada", inputFlex: "0 0 90px", flex: 0.7, mono: true },
+          { key: "aguja", dbKey: "aguja", label: "Aguja", placeholder: "Aguja", inputFlex: "0 0 80px", flex: 0.6, mono: true },
+          { key: "referencia", dbKey: "referencia", label: "Referencia", placeholder: "Referencia (ej. 11 70/10)", inputFlex: "0 0 100px", flex: 0.8, mono: true },
+          { key: "observaciones", dbKey: "observaciones", label: "Observaciones", inputFlex: "1 1 120px", flex: 1, muted: true },
+        ]}
+      />
+    </div>
+  );
+}
+
+function GenericBomSection({ title, help, table, masterCode, fields }) {
+  const emptyForm = () => Object.fromEntries(fields.map(f => [f.key, ""]));
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState(null);
+
+  function rowFromDB(r) {
+    const obj = { id: r.id };
+    fields.forEach(f => { obj[f.key] = r[f.dbKey] ?? ""; });
+    return obj;
+  }
+
+  async function load() {
+    setLoading(true);
+    try {
+      const data = await sb(`${table}?master_code=eq.${encodeURIComponent(masterCode)}&select=*&order=created_at.asc`, { method: "GET" });
+      setRows(data.map(rowFromDB));
+    } catch (e) {
+      alert("No se pudo cargar la información: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, [masterCode, table]);
+
+  function startEdit(r) {
+    setEditingId(r.id);
+    const f = {};
+    fields.forEach(fld => { f[fld.key] = String(r[fld.key] ?? ""); });
+    setForm(f);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(emptyForm());
+  }
+
+  async function submit() {
+    const missing = fields.some(f => f.required && !String(form[f.key] || "").trim());
+    if (missing) return;
+    const label = form[fields[0].key] || "este ítem";
+    if (editingId && !window.confirm(`¿Guardar los cambios en "${label}"?`)) return;
+    const body = { master_code: masterCode };
+    fields.forEach(f => { body[f.dbKey] = f.type === "number" ? (Number(form[f.key]) || 0) : form[f.key]; });
+    try {
+      if (editingId) {
+        const [row] = await sb(`${table}?id=eq.${editingId}`, { method: "PATCH", body: JSON.stringify(body) });
+        setRows(prev => prev.map(r => r.id === editingId ? rowFromDB(row) : r));
+      } else {
+        const [row] = await sb(table, { method: "POST", body: JSON.stringify(body) });
+        setRows(prev => [...prev, rowFromDB(row)]);
+      }
+      cancelEdit();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+  }
+  async function del(r) {
+    const label = r[fields[0].key] || "este ítem";
+    if (!window.confirm(`¿Eliminar "${label}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await sb(`${table}?id=eq.${r.id}`, { method: "DELETE" });
+      setRows(prev => prev.filter(x => x.id !== r.id));
+      if (editingId === r.id) cancelEdit();
+    } catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: help ? 2 : 8 }}>{title}</div>
+      {help && <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "0 0 8px" }}>{help}</p>}
+      {loading ? (
+        <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, display: "flex", alignItems: "center", gap: 6, padding: "4px 0" }}><Loader2 size={13} className="spin" /> Cargando...</div>
+      ) : (
+        <>
+          {rows.map(r => (
+            <LineItemRow key={r.id} onDelete={() => del(r)} onEdit={() => startEdit(r)} fields={fields.map(f => ({ value: r[f.key] || "—", flex: f.flex || 1, mono: f.mono, muted: f.muted }))} />
+          ))}
+          {rows.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin registros todavía.</div>}
+        </>
+      )}
+      {editingId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando...</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+        {fields.map(f => (
+          <input
+            key={f.key}
+            style={{ ...miniInput, flex: f.inputFlex || "1 1 100px" }}
+            type={f.type === "number" ? "number" : "text"}
+            step={f.type === "number" ? "any" : undefined}
+            min={f.type === "number" ? "0" : undefined}
+            placeholder={f.placeholder || f.label}
+            value={form[f.key] ?? ""}
+            onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+          />
+        ))}
+        <button onClick={submit} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingId && <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
       </div>
     </div>
   );
