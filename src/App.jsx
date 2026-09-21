@@ -151,7 +151,10 @@ const disenoMaestroFromDB = (r) => ({
   moldeArchivoUrl: r.molde_archivo_url, moldeArchivoNombre: r.molde_archivo_nombre, fotoUrl: r.foto_url,
 });
 const composicionFromDB = (r) => ({ id: r.id, codigo: r.codigo, nombre: r.nombre, color: r.color, tipo: r.tipo, descripcion: r.descripcion });
-const consumoFromDB = (r) => ({ id: r.id, codTalla: r.cod_talla, insumo: r.insumo, unidad: r.unidad, cantidad: Number(r.cantidad) || 0 });
+const consumoFromDB = (r) => ({
+  id: r.id, insumo: r.insumo, tipo: r.tipo, unidad: r.unidad,
+  cantidad: Number(r.cantidad) || 0, mermaPct: Number(r.merma_pct) || 0, proveedor: r.proveedor,
+});
 const procesoFromDB = (r) => ({ id: r.id, proceso: r.proceso, area: r.area, tiempoMinutos: Number(r.tiempo_minutos) || 0, notas: r.notas, orden: r.orden });
 
 async function uploadDisenoFile(masterCode, file, prefix) {
@@ -2296,7 +2299,7 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
   const [procesos, setProcesos] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [consForm, setConsForm] = useState({ insumo: "", unidad: "", cantidad: "" });
+  const [consForm, setConsForm] = useState({ insumo: "", tipo: "", unidad: "", cantidad: "", mermaPct: "", proveedor: "" });
   const [editingConsId, setEditingConsId] = useState(null);
 
   const [procForm, setProcForm] = useState({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
@@ -2321,16 +2324,19 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
 
   function startEditConsumo(c) {
     setEditingConsId(c.id);
-    setConsForm({ insumo: c.insumo, unidad: c.unidad || "", cantidad: String(c.cantidad) });
+    setConsForm({ insumo: c.insumo, tipo: c.tipo || "", unidad: c.unidad || "", cantidad: String(c.cantidad), mermaPct: String(c.mermaPct || 0), proveedor: c.proveedor || "" });
   }
   function cancelEditConsumo() {
     setEditingConsId(null);
-    setConsForm({ insumo: "", unidad: "", cantidad: "" });
+    setConsForm({ insumo: "", tipo: "", unidad: "", cantidad: "", mermaPct: "", proveedor: "" });
   }
   async function submitConsumo() {
     if (!consForm.insumo.trim() || consForm.cantidad === "") return;
     if (editingConsId && !window.confirm(`¿Guardar los cambios en "${consForm.insumo}"?`)) return;
-    const body = { master_code: diseno.masterCode, insumo: consForm.insumo, unidad: consForm.unidad, cantidad: Number(consForm.cantidad) || 0 };
+    const body = {
+      master_code: diseno.masterCode, insumo: consForm.insumo, tipo: consForm.tipo, unidad: consForm.unidad,
+      cantidad: Number(consForm.cantidad) || 0, merma_pct: Number(consForm.mermaPct) || 0, proveedor: consForm.proveedor,
+    };
     try {
       if (editingConsId) {
         const [row] = await sb(`produccion_consumos?id=eq.${editingConsId}`, { method: "PATCH", body: JSON.stringify(body) });
@@ -2388,20 +2394,30 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
         <div style={{ fontSize: 12, color: TOKENS.inkSoft, marginTop: 2 }}>{diseno.nombre}</div>
       </div>
 
-      {/* Consumo de materiales (promedio por referencia) */}
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Consumo de materiales (promedio por referencia)</div>
-      {consumos.map(c => (
-        <LineItemRow key={c.id} onDelete={() => deleteConsumo(c.id, c.insumo)} onEdit={() => startEditConsumo(c)} fields={[
-          { value: c.insumo, flex: 1.8 },
-          { value: `${c.cantidad} ${c.unidad || ""}`.trim(), flex: 1, mono: true, muted: true },
-        ]} />
-      ))}
-      {consumos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin consumos agregados.</div>}
-      {editingConsId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando consumo...</div>}
+      {/* BOM — Lista de materiales */}
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 2 }}>BOM · Lista de materiales</div>
+      <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "0 0 8px" }}>Detalle de cada insumo (telas, hilos, cierres, etiquetas...) con su cantidad neta y % de merma. La cantidad total ya incluye el desperdicio.</p>
+      {consumos.map(c => {
+        const total = c.cantidad * (1 + (c.mermaPct || 0) / 100);
+        return (
+          <LineItemRow key={c.id} onDelete={() => deleteConsumo(c.id, c.insumo)} onEdit={() => startEditConsumo(c)} fields={[
+            { value: c.insumo, flex: 1.5 },
+            { value: c.tipo || "—", flex: 0.9, muted: true },
+            { value: `${c.cantidad} ${c.unidad || ""}`.trim(), flex: 0.9, mono: true, muted: true },
+            { value: `${c.mermaPct || 0}%`, flex: 0.5, mono: true, muted: true },
+            { value: `${total.toFixed(2)} ${c.unidad || ""}`.trim(), flex: 0.9, mono: true },
+          ]} />
+        );
+      })}
+      {consumos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin insumos agregados al BOM.</div>}
+      {editingConsId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando insumo...</div>}
       <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 20, flexWrap: "wrap" }}>
-        <input style={{ ...miniInput, flex: 1.8 }} placeholder="Insumo (ej. Cierre metálico)" value={consForm.insumo} onChange={e => setConsForm(f => ({ ...f, insumo: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 70px" }} type="number" step="any" min="0" placeholder="Cant." value={consForm.cantidad} onChange={e => setConsForm(f => ({ ...f, cantidad: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 70px" }} placeholder="Unidad" value={consForm.unidad} onChange={e => setConsForm(f => ({ ...f, unidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1.5 }} placeholder="Insumo (ej. Hilo poliéster)" value={consForm.insumo} onChange={e => setConsForm(f => ({ ...f, insumo: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} placeholder="Tipo (ej. Hilo)" value={consForm.tipo} onChange={e => setConsForm(f => ({ ...f, tipo: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 65px" }} type="number" step="any" min="0" placeholder="Cant." value={consForm.cantidad} onChange={e => setConsForm(f => ({ ...f, cantidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 65px" }} placeholder="Unidad" value={consForm.unidad} onChange={e => setConsForm(f => ({ ...f, unidad: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 65px" }} type="number" step="any" min="0" placeholder="% merma" value={consForm.mermaPct} onChange={e => setConsForm(f => ({ ...f, mermaPct: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 100px" }} placeholder="Proveedor" value={consForm.proveedor} onChange={e => setConsForm(f => ({ ...f, proveedor: e.target.value }))} />
         <button onClick={submitConsumo} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingConsId ? <Pencil size={13} /> : <Plus size={14} />}</button>
         {editingConsId && <button onClick={cancelEditConsumo} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
       </div>
