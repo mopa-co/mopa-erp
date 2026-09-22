@@ -1614,7 +1614,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   doc.text("MOPA", (L + 60 + R) / 2, y + headerH / 4 + 2, { align: "center" });
   y += headerH / 2;
   box(L + 60, R - L - 60, headerH / 2);
-  cellText(L + 60, R - L - 60, headerH / 2, "FICHA TÉCNICA DISEÑO", { bold: true, size: 8.5, align: "center" });
+  cellText(L + 60, R - L - 60, headerH / 2, "FICHA TÉCNICA DISEÑO — TECH PACK", { bold: true, size: 7.8, align: "center" });
   y += headerH / 2;
 
   // --- Cuadrícula 5 x 3 (alto dinámico según el texto más largo de cada fila) ---
@@ -1700,6 +1700,101 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     compCols.forEach((col, i) => { box(col.x, col.w, rH); cellLines(col.x, col.w, rH, colLines[i], { size: 7 }); });
     y += rH;
   });
+  y += 4;
+
+  // --- Helper genérico para las tablas de Insumos y Producción ---
+  function drawSectionTable(title, columns, rows) {
+    newPageIfNeeded(6 + 6);
+    box(L, R - L, 6, { fill: true });
+    cellText(L, R - L, 6, title, { bold: true, size: 8, align: "center" });
+    y += 6;
+    let cx = L;
+    const cols = columns.map(c => { const x = cx; cx += c.w; return { ...c, x }; });
+    cols.forEach(c => { box(c.x, c.w, 6, { fill: true }); cellText(c.x, c.w, 6, c.label, { bold: true, size: 6.3, align: "center" }); });
+    y += 6;
+    if (rows.length === 0) {
+      newPageIfNeeded(7);
+      cols.forEach(c => box(c.x, c.w, 7));
+      y += 7;
+    }
+    rows.forEach(row => {
+      const colLines = cols.map(c => lines(row[c.key], c.w - 3, 6.8));
+      const rH = Math.max(7, ...colLines.map(l => neededH(l.length, 6.8)));
+      newPageIfNeeded(rH);
+      cols.forEach((c, i) => { box(c.x, c.w, rH); cellLines(c.x, c.w, rH, colLines[i], { size: 6.8 }); });
+      y += rH;
+    });
+    y += 4;
+  }
+
+  // --- Datos de Insumos y Producción (misma referencia) ---
+  const mc = encodeURIComponent(diseno.masterCode);
+  const [consumos, procesos, entretelas, hilos, procConf, procEsp, instrCostura] = await Promise.all([
+    sb(`produccion_consumos?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
+    sb(`produccion_procesos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" }),
+    sb(`produccion_entretelas?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
+    sb(`produccion_hilos?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
+    sb(`produccion_procesos_confeccion?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
+    sb(`produccion_procesos_especiales?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
+    sb(`produccion_instrucciones_costura?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
+  ]);
+
+  // --- BOM · Lista de materiales ---
+  drawSectionTable(
+    "BOM · LISTA DE MATERIALES",
+    [{ key: "insumo", w: 50, label: "INSUMO" }, { key: "tipo", w: 25, label: "TIPO" }, { key: "cantidad", w: 22, label: "CANT." }, { key: "merma", w: 18, label: "% MERMA" }, { key: "total", w: 27, label: "CANT. TOTAL" }, { key: "proveedor", w: 40, label: "PROVEEDOR" }],
+    consumos.map(c => {
+      const total = (Number(c.cantidad) || 0) * (1 + (Number(c.merma_pct) || 0) / 100);
+      return { insumo: c.insumo, tipo: c.tipo, cantidad: `${c.cantidad || 0} ${c.unidad || ""}`.trim(), merma: `${c.merma_pct || 0}%`, total: `${total.toFixed(2)} ${c.unidad || ""}`.trim(), proveedor: c.proveedor };
+    })
+  );
+
+  // --- Entretelas ---
+  drawSectionTable(
+    "ENTRETELAS",
+    [{ key: "codigo", w: 25, label: "CÓDIGO" }, { key: "descripcion", w: 90, label: "DESCRIPCIÓN - COMPOSICIÓN" }, { key: "observaciones", w: 67, label: "OBSERVACIONES" }],
+    entretelas.map(e => ({ codigo: e.codigo, descripcion: e.descripcion_composicion, observaciones: e.observaciones }))
+  );
+
+  // --- Hilos e hilazas ---
+  drawSectionTable(
+    "HILOS E HILAZAS",
+    [{ key: "codigo", w: 18, label: "CÓDIGO" }, { key: "tipo", w: 30, label: "TIPO DE INSUMO" }, { key: "descripcion", w: 35, label: "DESCRIPCIÓN" }, { key: "color", w: 20, label: "COLOR" }, { key: "consumo", w: 20, label: "CONSUMO" }, { key: "unidad", w: 15, label: "UNIDAD" }, { key: "observaciones", w: 44, label: "OBSERVACIONES" }],
+    hilos.map(h => ({ codigo: h.codigo, tipo: h.tipo_insumo, descripcion: h.descripcion, color: h.color, consumo: h.consumo, unidad: h.unidad, observaciones: h.observaciones }))
+  );
+
+  // --- Procesos de confección ---
+  drawSectionTable(
+    "PROCESOS CONFECCIÓN",
+    [{ key: "codigo", w: 18, label: "CÓDIGO" }, { key: "tipo", w: 45, label: "TIPO / INSUMO" }, { key: "proceso", w: 40, label: "PROCESO" }, { key: "observaciones", w: 79, label: "OBSERVACIONES" }],
+    procConf.map(p => ({ codigo: p.codigo, tipo: p.tipo_preparacion, proceso: p.descripcion, observaciones: p.observaciones }))
+  );
+
+  // --- Procesos especiales (estampado, bordado) ---
+  drawSectionTable(
+    "PROCESOS ESPECIALES (ESTAMPADO, BORDADO)",
+    [{ key: "codigo", w: 18, label: "CÓDIGO" }, { key: "tipo", w: 45, label: "TIPO / INSUMO" }, { key: "proceso", w: 40, label: "PROCESO" }, { key: "observaciones", w: 79, label: "OBSERVACIONES" }],
+    procEsp.map(p => ({ codigo: p.codigo, tipo: p.tipo_preparacion, proceso: p.descripcion, observaciones: p.observaciones }))
+  );
+
+  // --- Instrucciones de costura ---
+  drawSectionTable(
+    "INSTRUCCIONES DE COSTURA",
+    [{ key: "maquina", w: 40, label: "MÁQUINA" }, { key: "ppp", w: 22, label: "PPP" }, { key: "aguja", w: 20, label: "AGUJA" }, { key: "referencia", w: 30, label: "REFERENCIA" }, { key: "observaciones", w: 70, label: "OBSERVACIONES" }],
+    instrCostura.map(i => ({ maquina: i.maquina, ppp: i.ppp, aguja: i.aguja, referencia: i.referencia, observaciones: i.observaciones }))
+  );
+
+  // --- Tiempos y procesos de producción ---
+  const tiempoTotalPdf = procesos.reduce((a, p) => a + (Number(p.tiempo_minutos) || 0), 0);
+  drawSectionTable(
+    "TIEMPOS Y PROCESOS DE PRODUCCIÓN",
+    [{ key: "proceso", w: 40, label: "PROCESO" }, { key: "area", w: 35, label: "ÁREA" }, { key: "notas", w: 85, label: "NOTAS" }, { key: "tiempo", w: 22, label: "MIN." }],
+    procesos.map(p => ({ proceso: p.proceso, area: p.area, notas: p.notas, tiempo: `${p.tiempo_minutos || 0}` }))
+  );
+  newPageIfNeeded(7);
+  box(L, R - L, 7, { fill: true });
+  cellText(L, R - L, 7, `TIEMPO TOTAL DE PRODUCCIÓN: ${tiempoTotalPdf} MIN`, { bold: true, size: 8 });
+  y += 7;
 
   // --- Elaborado por ---
   newPageIfNeeded(7);
@@ -2205,7 +2300,7 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
             }}
             style={{ ...iconBtn, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, opacity: generandoPdf ? 0.6 : 1 }}
           >
-            {generandoPdf ? <Loader2 size={13} className="spin" /> : <FileText size={13} />} {generandoPdf ? "Generando..." : "Ver ficha en PDF"}
+            {generandoPdf ? <Loader2 size={13} className="spin" /> : <FileText size={13} />} {generandoPdf ? "Generando..." : "Ver Tech Pack (PDF)"}
           </button>
         </div>
         {pdfPreview && <PdfPreviewModal preview={pdfPreview} onClose={() => setPdfPreview(null)} />}
