@@ -1602,20 +1602,42 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     return pad * 2 + numLines * lineHeightMM(size);
   }
   function newPageIfNeeded(needed) {
-    if (y + needed > 285) { doc.addPage(); y = 14; }
+    if (y + needed > 278) { doc.addPage(); y = 14; drawRunningHeader(); }
   }
 
-  // --- Encabezado ---
-  const headerH = 14;
-  box(L, 60, headerH);
-  cellText(L, 60, headerH, "INDUSTRIA TEXTIL DE NARIÑO SAS", { bold: true, size: 7.5, align: "center" });
-  box(L + 60, R - L - 60, headerH / 2, { fill: true });
-  doc.setFont(undefined, "bold"); doc.setFontSize(15);
-  doc.text("MOPA", (L + 60 + R) / 2, y + headerH / 4 + 2, { align: "center" });
-  y += headerH / 2;
-  box(L + 60, R - L - 60, headerH / 2);
-  cellText(L + 60, R - L - 60, headerH / 2, "FICHA TÉCNICA DISEÑO — TECH PACK", { bold: true, size: 7.8, align: "center" });
-  y += headerH / 2;
+  // --- Encabezado fijo con la información básica de la prenda (se repite en cada página) ---
+  function drawRunningHeader() {
+    const catNombre = catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || diseno.codCategoria || "—";
+    const segNombre = catalogs.segmentos.find(c => c.cod === diseno.codSegmento)?.nombre || diseno.codSegmento || "—";
+    const linNombre = catalogs.lineas.find(c => c.cod === diseno.codLinea)?.nombre || diseno.codLinea || "—";
+    const disNombre = catalogs.disenos.find(c => c.cod === diseno.codDiseno)?.nombre || diseno.codDiseno || "—";
+    box(L, R - L, 13, { fill: true });
+    doc.setFont(undefined, "bold"); doc.setFontSize(9);
+    doc.text(String(form.nombre || diseno.nombre || "—").toUpperCase(), L + 2, y + 5, { maxWidth: R - L - 4 });
+    doc.setFont(undefined, "normal"); doc.setFontSize(6.8);
+    const line2 = `SKU: ${diseno.masterCode}   CATEGORÍA: ${catNombre}   SEGMENTO: ${segNombre}   LÍNEA: ${linNombre}   DISEÑO: ${disNombre}   CONSECUTIVO: ${diseno.consecutivo}   FECHA ELABORACIÓN: ${form.fechaElaboracion || "—"}`;
+    doc.text(line2, L + 2, y + 10.2, { maxWidth: R - L - 4 });
+    y += 13 + 4;
+  }
+
+  let sectionStarted = false;
+  function startSection(title) {
+    if (sectionStarted) { doc.addPage(); y = 14; }
+    sectionStarted = true;
+    drawRunningHeader();
+    doc.setFont(undefined, "bold"); doc.setFontSize(12);
+    doc.text(title, (L + R) / 2, y, { align: "center" });
+    y += 8;
+  }
+
+  // Marca de la empresa (solo en la portada, arriba de todo)
+  doc.setFont(undefined, "bold"); doc.setFontSize(8);
+  doc.text("INDUSTRIA TEXTIL DE NARIÑO SAS", L, 10);
+  doc.setFontSize(13);
+  doc.text("MOPA", R, 10, { align: "right" });
+  y = 16;
+
+  startSection("FICHA TÉCNICA DE DISEÑO");
 
   // --- Cuadrícula 5 x 3 (alto dinámico según el texto más largo de cada fila) ---
   const blocks = [{ x: L, labelW: 26, valueW: 34 }, { x: 76, labelW: 22, valueW: 33 }, { x: 133, labelW: 24, valueW: R - 133 - 24 }];
@@ -1701,13 +1723,8 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     y += rH;
   });
 
-  // La página 1 termina en Composiciones; Insumos y Producción arranca siempre en página nueva
-  doc.addPage();
-  y = 14;
-  doc.setFont(undefined, "bold");
-  doc.setFontSize(13);
-  doc.text("INSUMOS Y PRODUCCIÓN", (L + R) / 2, y, { align: "center" });
-  y += 8;
+  // Insumos y Producción arranca siempre en página nueva, con el encabezado fijo repetido
+  startSection("INSUMOS Y PRODUCCIÓN");
 
   // --- Helper genérico para las tablas de Insumos y Producción ---
   function drawSectionTable(title, columns, rows) {
@@ -1791,7 +1808,8 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     instrCostura.map(i => ({ maquina: i.maquina, ppp: i.ppp, aguja: i.aguja, referencia: i.referencia, observaciones: i.observaciones }))
   );
 
-  // --- Tiempos y procesos de producción ---
+  // --- Tiempos y Ruta Operacional: página independiente ---
+  startSection("TIEMPOS Y RUTA OPERACIONAL");
   const tiempoTotalPdf = procesos.reduce((a, p) => a + (Number(p.tiempo_minutos) || 0), 0);
   drawSectionTable(
     "TIEMPOS Y PROCESOS DE PRODUCCIÓN",
@@ -2335,9 +2353,11 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
       <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: `1px solid ${TOKENS.border}` }}>
         <TabBtn active={tab === "ficha"} onClick={() => setTab("ficha")} icon={<FileText size={14} />}>Ficha Técnica de Diseño</TabBtn>
         <TabBtn active={tab === "insumos"} onClick={() => setTab("insumos")} icon={<ClipboardList size={14} />}>Insumos y Producción</TabBtn>
+        <TabBtn active={tab === "tiempos"} onClick={() => setTab("tiempos")} icon={<Factory size={14} />}>Tiempos y Ruta Operacional</TabBtn>
       </div>
 
       {tab === "insumos" && <InsumosProduccionPanel diseno={diseno} catalogs={catalogs} />}
+      {tab === "tiempos" && <TiemposRutaPanel diseno={diseno} />}
 
       {tab === "ficha" && (
         <>
@@ -2410,24 +2430,16 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
 
 function InsumosProduccionPanel({ diseno, catalogs }) {
   const [consumos, setConsumos] = useState([]);
-  const [procesos, setProcesos] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [consForm, setConsForm] = useState({ insumo: "", tipo: "", unidad: "", cantidad: "", mermaPct: "", proveedor: "" });
   const [editingConsId, setEditingConsId] = useState(null);
 
-  const [procForm, setProcForm] = useState({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
-  const [editingProcId, setEditingProcId] = useState(null);
-
   async function load() {
     setLoading(true);
     try {
-      const [consRows, procRows] = await Promise.all([
-        sb(`produccion_consumos?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=created_at.asc`, { method: "GET" }),
-        sb(`produccion_procesos?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=orden.asc,created_at.asc`, { method: "GET" }),
-      ]);
+      const consRows = await sb(`produccion_consumos?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=created_at.asc`, { method: "GET" });
       setConsumos(consRows.map(consumoFromDB));
-      setProcesos(procRows.map(procesoFromDB));
     } catch (e) {
       alert("No se pudo cargar la información: " + e.message);
     } finally {
@@ -2468,37 +2480,6 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
     catch (e) { alert("No se pudo eliminar: " + e.message); }
   }
 
-  function startEditProceso(p) {
-    setEditingProcId(p.id);
-    setProcForm({ proceso: p.proceso, area: p.area || "", tiempoMinutos: String(p.tiempoMinutos), notas: p.notas || "" });
-  }
-  function cancelEditProceso() {
-    setEditingProcId(null);
-    setProcForm({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
-  }
-  async function submitProceso() {
-    if (!procForm.proceso.trim() || procForm.tiempoMinutos === "") return;
-    if (editingProcId && !window.confirm(`¿Guardar los cambios en "${procForm.proceso}"?`)) return;
-    const body = { master_code: diseno.masterCode, proceso: procForm.proceso, area: procForm.area, tiempo_minutos: Number(procForm.tiempoMinutos) || 0, notas: procForm.notas, orden: procesos.length };
-    try {
-      if (editingProcId) {
-        const [row] = await sb(`produccion_procesos?id=eq.${editingProcId}`, { method: "PATCH", body: JSON.stringify(body) });
-        setProcesos(prev => prev.map(p => p.id === editingProcId ? procesoFromDB(row) : p));
-      } else {
-        const [row] = await sb("produccion_procesos", { method: "POST", body: JSON.stringify(body) });
-        setProcesos(prev => [...prev, procesoFromDB(row)]);
-      }
-      cancelEditProceso();
-    } catch (e) { alert("No se pudo guardar: " + e.message); }
-  }
-  async function deleteProceso(id, proceso) {
-    if (!window.confirm(`¿Eliminar "${proceso}"? Esta acción no se puede deshacer.`)) return;
-    try { await sb(`produccion_procesos?id=eq.${id}`, { method: "DELETE" }); setProcesos(prev => prev.filter(p => p.id !== id)); if (editingProcId === id) cancelEditProceso(); }
-    catch (e) { alert("No se pudo eliminar: " + e.message); }
-  }
-
-  const tiempoTotal = procesos.reduce((a, p) => a + p.tiempoMinutos, 0);
-
   if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando...</div>;
 
   return (
@@ -2534,32 +2515,6 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
         <input style={{ ...miniInput, flex: "0 0 100px" }} placeholder="Proveedor" value={consForm.proveedor} onChange={e => setConsForm(f => ({ ...f, proveedor: e.target.value }))} />
         <button onClick={submitConsumo} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingConsId ? <Pencil size={13} /> : <Plus size={14} />}</button>
         {editingConsId && <button onClick={cancelEditConsumo} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
-      </div>
-
-      {/* Tiempos y procesos de producción */}
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Tiempos y procesos de producción</div>
-      {procesos.map(p => (
-        <LineItemRow key={p.id} onDelete={() => deleteProceso(p.id, p.proceso)} onEdit={() => startEditProceso(p)} fields={[
-          { value: p.proceso, flex: 1.3 },
-          { value: p.area || "—", flex: 1, muted: true },
-          { value: p.notas || "—", flex: 1.4, muted: true },
-          { value: `${p.tiempoMinutos} min`, flex: 0.8, mono: true },
-        ]} />
-      ))}
-      {procesos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin procesos agregados.</div>}
-      {editingProcId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando proceso...</div>}
-      <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Proceso (ej. Corte)" value={procForm.proceso} onChange={e => setProcForm(f => ({ ...f, proceso: e.target.value }))} />
-        <input style={{ ...miniInput, flex: 1 }} placeholder="Área / responsable" value={procForm.area} onChange={e => setProcForm(f => ({ ...f, area: e.target.value }))} />
-        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Notas" value={procForm.notas} onChange={e => setProcForm(f => ({ ...f, notas: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" step="any" min="0" placeholder="Minutos" value={procForm.tiempoMinutos} onChange={e => setProcForm(f => ({ ...f, tiempoMinutos: e.target.value }))} />
-        <button onClick={submitProceso} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingProcId ? <Pencil size={13} /> : <Plus size={14} />}</button>
-        {editingProcId && <button onClick={cancelEditProceso} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
-      </div>
-
-      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: TOKENS.inkSoft }}>Tiempo total de producción</span>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 700 }}>{tiempoTotal} min</span>
       </div>
 
       <GenericBomSection
@@ -2624,6 +2579,88 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
           { key: "observaciones", dbKey: "observaciones", label: "Observaciones", inputFlex: "1 1 120px", flex: 1, muted: true },
         ]}
       />
+    </div>
+  );
+}
+
+function TiemposRutaPanel({ diseno }) {
+  const [procesos, setProcesos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [procForm, setProcForm] = useState({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
+  const [editingProcId, setEditingProcId] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const procRows = await sb(`produccion_procesos?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
+      setProcesos(procRows.map(procesoFromDB));
+    } catch (e) {
+      alert("No se pudo cargar la información: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, [diseno?.masterCode]);
+
+  function startEditProceso(p) {
+    setEditingProcId(p.id);
+    setProcForm({ proceso: p.proceso, area: p.area || "", tiempoMinutos: String(p.tiempoMinutos), notas: p.notas || "" });
+  }
+  function cancelEditProceso() {
+    setEditingProcId(null);
+    setProcForm({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
+  }
+  async function submitProceso() {
+    if (!procForm.proceso.trim() || procForm.tiempoMinutos === "") return;
+    if (editingProcId && !window.confirm(`¿Guardar los cambios en "${procForm.proceso}"?`)) return;
+    const body = { master_code: diseno.masterCode, proceso: procForm.proceso, area: procForm.area, tiempo_minutos: Number(procForm.tiempoMinutos) || 0, notas: procForm.notas, orden: procesos.length };
+    try {
+      if (editingProcId) {
+        const [row] = await sb(`produccion_procesos?id=eq.${editingProcId}`, { method: "PATCH", body: JSON.stringify(body) });
+        setProcesos(prev => prev.map(p => p.id === editingProcId ? procesoFromDB(row) : p));
+      } else {
+        const [row] = await sb("produccion_procesos", { method: "POST", body: JSON.stringify(body) });
+        setProcesos(prev => [...prev, procesoFromDB(row)]);
+      }
+      cancelEditProceso();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+  }
+  async function deleteProceso(id, proceso) {
+    if (!window.confirm(`¿Eliminar "${proceso}"? Esta acción no se puede deshacer.`)) return;
+    try { await sb(`produccion_procesos?id=eq.${id}`, { method: "DELETE" }); setProcesos(prev => prev.filter(p => p.id !== id)); if (editingProcId === id) cancelEditProceso(); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  const tiempoTotal = procesos.reduce((a, p) => a + p.tiempoMinutos, 0);
+
+  if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Tiempos y procesos de producción</div>
+      {procesos.map(p => (
+        <LineItemRow key={p.id} onDelete={() => deleteProceso(p.id, p.proceso)} onEdit={() => startEditProceso(p)} fields={[
+          { value: p.proceso, flex: 1.3 },
+          { value: p.area || "—", flex: 1, muted: true },
+          { value: p.notas || "—", flex: 1.4, muted: true },
+          { value: `${p.tiempoMinutos} min`, flex: 0.8, mono: true },
+        ]} />
+      ))}
+      {procesos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin procesos agregados.</div>}
+      {editingProcId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando proceso...</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Proceso (ej. Corte)" value={procForm.proceso} onChange={e => setProcForm(f => ({ ...f, proceso: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1 }} placeholder="Área / responsable" value={procForm.area} onChange={e => setProcForm(f => ({ ...f, area: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Notas" value={procForm.notas} onChange={e => setProcForm(f => ({ ...f, notas: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" step="any" min="0" placeholder="Minutos" value={procForm.tiempoMinutos} onChange={e => setProcForm(f => ({ ...f, tiempoMinutos: e.target.value }))} />
+        <button onClick={submitProceso} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingProcId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingProcId && <button onClick={cancelEditProceso} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
+      </div>
+
+      <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: TOKENS.inkSoft }}>Tiempo total de producción</span>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 700 }}>{tiempoTotal} min</span>
+      </div>
     </div>
   );
 }
