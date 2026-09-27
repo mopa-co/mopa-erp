@@ -1686,7 +1686,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   box(L, R - L, 6, { fill: true });
   cellText(L, R - L, 6, "COMPOSICIONES", { bold: true, size: 8, align: "center" });
   y += 6;
-  const compCols = [{ x: L, w: 20, key: "codigo", label: "CÓDIGO" }, { x: L + 20, w: 45, key: "nombre", label: "NOMBRE" }, { x: L + 65, w: 30, key: "color", label: "COLOR" }, { x: L + 95, w: 25, key: "tipo", label: "TIPO" }, { x: L + 120, w: R - L - 120, key: "descripcion", label: "DESCRIPCIÓN" }];
+  const compCols = [{ x: L, w: 25, key: "codigo", label: "CÓDIGO" }, { x: L + 25, w: 55, key: "nombre", label: "NOMBRE" }, { x: L + 80, w: 30, key: "tipo", label: "TIPO" }, { x: L + 110, w: R - L - 110, key: "descripcion", label: "DESCRIPCIÓN" }];
   compCols.forEach(c => { box(c.x, c.w, 6, { fill: true }); cellText(c.x, c.w, 6, c.label, { bold: true, size: 6.5, align: "center" }); });
   y += 6;
   if (composiciones.length === 0) {
@@ -1700,7 +1700,14 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     compCols.forEach((col, i) => { box(col.x, col.w, rH); cellLines(col.x, col.w, rH, colLines[i], { size: 7 }); });
     y += rH;
   });
-  y += 4;
+
+  // La página 1 termina en Composiciones; Insumos y Producción arranca siempre en página nueva
+  doc.addPage();
+  y = 14;
+  doc.setFont(undefined, "bold");
+  doc.setFontSize(13);
+  doc.text("INSUMOS Y PRODUCCIÓN", (L + R) / 2, y, { align: "center" });
+  y += 8;
 
   // --- Helper genérico para las tablas de Insumos y Producción ---
   function drawSectionTable(title, columns, rows) {
@@ -2153,7 +2160,8 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [generandoPdf, setGenerandoPdf] = useState(false);
   const [pdfPreview, setPdfPreview] = useState(null);
-  const [compForm, setCompForm] = useState({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
+  const [compForm, setCompForm] = useState({ codigo: "", nombre: "", tipo: "", descripcion: "" });
+  const [editingCompId, setEditingCompId] = useState(null);
   const [descripcionTouched, setDescripcionTouched] = useState(false);
   const [tab, setTab] = useState("ficha");
 
@@ -2178,13 +2186,10 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
     const disPart = disNombre && disNombre !== "No aplica" ? ` ${disNombre}` : "";
     let texto = `${base} ${segNombre} ${linNombre}${disPart}`.replace(/\s+/g, " ").trim();
     if (composiciones.length > 0) {
-      const partes = composiciones.map(c => {
-        const detalle = [c.nombre, c.color].filter(Boolean).join(" ");
-        return c.descripcion ? `${detalle} (${c.descripcion})` : detalle;
-      }).filter(Boolean);
+      const partes = composiciones.map(c => c.descripcion ? `${c.nombre} (${c.descripcion})` : c.nombre).filter(Boolean);
       texto += `. Composición: ${partes.join(", ")}.`;
     }
-    return texto;
+    return texto.toUpperCase();
   }
 
   useEffect(() => {
@@ -2194,7 +2199,7 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
   }, [form?.prenda, composiciones, catalogs]);
 
   function set(field) { return (e) => setForm(f => ({ ...f, [field]: e.target.type === "checkbox" ? e.target.checked : e.target.value })); }
-  function setDescripcion(e) { setDescripcionTouched(true); setForm(f => ({ ...f, descripcionPrenda: e.target.value })); }
+  function setDescripcion(e) { setDescripcionTouched(true); setForm(f => ({ ...f, descripcionPrenda: e.target.value.toUpperCase() })); }
   function regenerarDescripcion() { setDescripcionTouched(false); setForm(f => ({ ...f, descripcionPrenda: descripcionSugerida() })); }
 
   async function handleMoldeFile(e) {
@@ -2240,17 +2245,31 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
     setSaving(false);
   }
 
-  async function addComposicion() {
+  function startEditComposicion(c) {
+    setEditingCompId(c.id);
+    setCompForm({ codigo: c.codigo || "", nombre: c.nombre || "", tipo: c.tipo || "", descripcion: c.descripcion || "" });
+  }
+  function cancelEditComposicion() {
+    setEditingCompId(null);
+    setCompForm({ codigo: "", nombre: "", tipo: "", descripcion: "" });
+  }
+  async function submitComposicion() {
     if (!compForm.nombre.trim()) return;
+    if (editingCompId && !window.confirm(`¿Guardar los cambios en "${compForm.nombre}"?`)) return;
     try {
-      const [row] = await sb("disenos_composiciones", { method: "POST", body: JSON.stringify({ master_code: diseno.masterCode, ...compForm }) });
-      setComposiciones(prev => [...prev, composicionFromDB(row)]);
-      setCompForm({ codigo: "", nombre: "", color: "", tipo: "", descripcion: "" });
-    } catch (e) { alert("No se pudo agregar: " + e.message); }
+      if (editingCompId) {
+        const [row] = await sb(`disenos_composiciones?id=eq.${editingCompId}`, { method: "PATCH", body: JSON.stringify(compForm) });
+        setComposiciones(prev => prev.map(c => c.id === editingCompId ? composicionFromDB(row) : c));
+      } else {
+        const [row] = await sb("disenos_composiciones", { method: "POST", body: JSON.stringify({ master_code: diseno.masterCode, ...compForm }) });
+        setComposiciones(prev => [...prev, composicionFromDB(row)]);
+      }
+      cancelEditComposicion();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
   }
   async function deleteComposicion(id, nombre) {
-    if (!window.confirm(`¿Eliminar "${nombre}"?`)) return;
-    try { await sb(`disenos_composiciones?id=eq.${id}`, { method: "DELETE" }); setComposiciones(prev => prev.filter(c => c.id !== id)); }
+    if (!window.confirm(`¿Eliminar "${nombre}"? Esta acción no se puede deshacer.`)) return;
+    try { await sb(`disenos_composiciones?id=eq.${id}`, { method: "DELETE" }); setComposiciones(prev => prev.filter(c => c.id !== id)); if (editingCompId === id) cancelEditComposicion(); }
     catch (e) { alert("No se pudo eliminar: " + e.message); }
   }
 
@@ -2314,7 +2333,7 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: `1px solid ${TOKENS.border}` }}>
-        <TabBtn active={tab === "ficha"} onClick={() => setTab("ficha")} icon={<FileText size={14} />}>Ficha técnica</TabBtn>
+        <TabBtn active={tab === "ficha"} onClick={() => setTab("ficha")} icon={<FileText size={14} />}>Ficha Técnica de Diseño</TabBtn>
         <TabBtn active={tab === "insumos"} onClick={() => setTab("insumos")} icon={<ClipboardList size={14} />}>Insumos y Producción</TabBtn>
       </div>
 
@@ -2366,20 +2385,20 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
       ) : (
         <>
           {composiciones.map(c => (
-            <LineItemRow key={c.id} onDelete={() => deleteComposicion(c.id, c.nombre)} onEdit={() => {}} fields={[
-              { value: c.nombre, flex: 1.4 },
-              { value: c.color || "—", flex: 1, muted: true },
-              { value: c.tipo || "—", flex: 0.8, muted: true },
-              { value: c.descripcion || "—", flex: 1.6, muted: true },
+            <LineItemRow key={c.id} onDelete={() => deleteComposicion(c.id, c.nombre)} onEdit={() => startEditComposicion(c)} fields={[
+              { value: c.nombre, flex: 1.6 },
+              { value: c.tipo || "—", flex: 0.9, muted: true },
+              { value: c.descripcion || "—", flex: 1.8, muted: true },
             ]} />
           ))}
           {composiciones.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin composiciones agregadas.</div>}
+          {editingCompId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando composición...</div>}
           <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-            <input style={{ ...miniInput, flex: 1 }} placeholder="Nombre (ej. Tejido andino)" value={compForm.nombre} onChange={e => setCompForm(f => ({ ...f, nombre: e.target.value }))} />
-            <input style={{ ...miniInput, flex: "0 0 100px" }} placeholder="Color" value={compForm.color} onChange={e => setCompForm(f => ({ ...f, color: e.target.value }))} />
-            <input style={{ ...miniInput, flex: "0 0 80px" }} placeholder="Tipo" value={compForm.tipo} onChange={e => setCompForm(f => ({ ...f, tipo: e.target.value }))} />
-            <input style={{ ...miniInput, flex: 1.4 }} placeholder="Descripción (ej. 100% acrílico)" value={compForm.descripcion} onChange={e => setCompForm(f => ({ ...f, descripcion: e.target.value }))} />
-            <button onClick={addComposicion} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}><Plus size={14} /></button>
+            <input style={{ ...miniInput, flex: 1.4 }} placeholder="Nombre (ej. Tejido andino)" value={compForm.nombre} onChange={e => setCompForm(f => ({ ...f, nombre: e.target.value }))} />
+            <input style={{ ...miniInput, flex: "0 0 90px" }} placeholder="Tipo" value={compForm.tipo} onChange={e => setCompForm(f => ({ ...f, tipo: e.target.value }))} />
+            <input style={{ ...miniInput, flex: 1.6 }} placeholder="Descripción (ej. 100% acrílico)" value={compForm.descripcion} onChange={e => setCompForm(f => ({ ...f, descripcion: e.target.value }))} />
+            <button onClick={submitComposicion} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingCompId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+            {editingCompId && <button onClick={cancelEditComposicion} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
           </div>
         </>
       )}
