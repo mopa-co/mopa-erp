@@ -156,6 +156,13 @@ const consumoFromDB = (r) => ({
   cantidad: Number(r.cantidad) || 0, mermaPct: Number(r.merma_pct) || 0, proveedor: r.proveedor,
 });
 const procesoFromDB = (r) => ({ id: r.id, proceso: r.proceso, area: r.area, tiempoMinutos: Number(r.tiempo_minutos) || 0, notas: r.notas, orden: r.orden });
+const subgrupoFromDB = (r) => ({ id: r.id, grupo: r.grupo, nombre: r.nombre, orden: r.orden });
+const operacionFromDB = (r) => ({ id: r.id, subgrupoId: r.subgrupo_id, numero: r.numero, descripcion: r.descripcion, maquina: r.maquina, minutosStd: Number(r.minutos_std) || 0, observaciones: r.observaciones });
+const GRUPOS_CONFECCION = [
+  { key: "preparacion", label: "Preparación" },
+  { key: "ensamble", label: "Ensamble" },
+  { key: "terminados_acabados", label: "Terminados y Acabados" },
+];
 
 async function uploadDisenoFile(masterCode, file, prefix) {
   const path = `${encodeURIComponent(masterCode)}/${prefix}_${Date.now()}_${encodeURIComponent(file.name)}`;
@@ -1772,9 +1779,10 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
 
   // --- Datos de Insumos y Producción (misma referencia) ---
   const mc = encodeURIComponent(diseno.masterCode);
-  const [consumos, procesos, entretelas, hilos, procConf, procEsp, instrCostura] = await Promise.all([
+  const [consumos, subgruposConf, operacionesConf, entretelas, hilos, procConf, procEsp, instrCostura] = await Promise.all([
     sb(`produccion_consumos?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
-    sb(`produccion_procesos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" }),
+    sb(`produccion_confeccion_subgrupos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" }),
+    sb(`produccion_confeccion_operaciones?master_code=eq.${mc}&select=*&order=numero.asc,created_at.asc`, { method: "GET" }),
     sb(`produccion_entretelas?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
     sb(`produccion_hilos?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
     sb(`produccion_procesos_confeccion?master_code=eq.${mc}&select=*&order=created_at.asc`, { method: "GET" }),
@@ -1829,15 +1837,26 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
 
   // --- Tiempos y Ruta Operacional: página independiente ---
   startSection("TIEMPOS Y RUTA OPERACIONAL", { withInfo: true });
-  const tiempoTotalPdf = procesos.reduce((a, p) => a + (Number(p.tiempo_minutos) || 0), 0);
-  drawSectionTable(
-    "TIEMPOS Y PROCESOS DE PRODUCCIÓN",
-    [{ key: "proceso", w: 40, label: "PROCESO" }, { key: "area", w: 35, label: "ÁREA" }, { key: "notas", w: 85, label: "NOTAS" }, { key: "tiempo", w: 22, label: "MIN." }],
-    procesos.map(p => ({ proceso: p.proceso, area: p.area, notas: p.notas, tiempo: `${p.tiempo_minutos || 0}` }))
-  );
+  GRUPOS_CONFECCION.forEach(grupo => {
+    const sgsDelGrupo = subgruposConf.filter(s => s.grupo === grupo.key);
+    if (sgsDelGrupo.length === 0) return;
+    newPageIfNeeded(6);
+    doc.setFont(undefined, "bold"); doc.setFontSize(9);
+    doc.text(grupo.label.toUpperCase(), L, y);
+    y += 5;
+    sgsDelGrupo.forEach(sg => {
+      const ops = operacionesConf.filter(o => o.subgrupo_id === sg.id).sort((a, b) => (a.numero || 0) - (b.numero || 0));
+      drawSectionTable(
+        `${sg.nombre.toUpperCase()}`,
+        [{ key: "numero", w: 14, label: "#" }, { key: "descripcion", w: 65, label: "DESCRIPCIÓN OPERACIÓN" }, { key: "maquina", w: 35, label: "MÁQUINA" }, { key: "minutos", w: 25, label: "MIN. (STD)" }, { key: "observaciones", w: R - L - 139, label: "OBSERVACIONES" }],
+        ops.map(o => ({ numero: `#${o.numero}`, descripcion: o.descripcion, maquina: o.maquina, minutos: `${o.minutos_std || 0}`, observaciones: o.observaciones }))
+      );
+    });
+  });
+  const tiempoTotalPdf = operacionesConf.reduce((a, o) => a + (Number(o.minutos_std) || 0), 0);
   newPageIfNeeded(7);
   box(L, R - L, 7, { fill: true });
-  cellText(L, R - L, 7, `TIEMPO TOTAL DE PRODUCCIÓN: ${tiempoTotalPdf} MIN`, { bold: true, size: 8 });
+  cellText(L, R - L, 7, `TIEMPO TOTAL DE PRODUCCIÓN (TODAS LAS OPERACIONES): ${tiempoTotalPdf} MIN`, { bold: true, size: 8 });
   y += 7;
 
   // --- Elaborado por ---
@@ -2603,16 +2622,21 @@ function InsumosProduccionPanel({ diseno, catalogs }) {
 }
 
 function TiemposRutaPanel({ diseno }) {
-  const [procesos, setProcesos] = useState([]);
+  const [subgrupos, setSubgrupos] = useState([]);
+  const [operaciones, setOperaciones] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [procForm, setProcForm] = useState({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
-  const [editingProcId, setEditingProcId] = useState(null);
+  const [nuevoSubgrupo, setNuevoSubgrupo] = useState({}); // { [grupoKey]: nombre }
 
   async function load() {
     setLoading(true);
     try {
-      const procRows = await sb(`produccion_procesos?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
-      setProcesos(procRows.map(procesoFromDB));
+      const mc = encodeURIComponent(diseno.masterCode);
+      const [sgRows, opRows] = await Promise.all([
+        sb(`produccion_confeccion_subgrupos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" }),
+        sb(`produccion_confeccion_operaciones?master_code=eq.${mc}&select=*&order=numero.asc,created_at.asc`, { method: "GET" }),
+      ]);
+      setSubgrupos(sgRows.map(subgrupoFromDB));
+      setOperaciones(opRows.map(operacionFromDB));
     } catch (e) {
       alert("No se pudo cargar la información: " + e.message);
     } finally {
@@ -2621,64 +2645,152 @@ function TiemposRutaPanel({ diseno }) {
   }
   useEffect(() => { load(); }, [diseno?.masterCode]);
 
-  function startEditProceso(p) {
-    setEditingProcId(p.id);
-    setProcForm({ proceso: p.proceso, area: p.area || "", tiempoMinutos: String(p.tiempoMinutos), notas: p.notas || "" });
-  }
-  function cancelEditProceso() {
-    setEditingProcId(null);
-    setProcForm({ proceso: "", area: "", tiempoMinutos: "", notas: "" });
-  }
-  async function submitProceso() {
-    if (!procForm.proceso.trim() || procForm.tiempoMinutos === "") return;
-    if (editingProcId && !window.confirm(`¿Guardar los cambios en "${procForm.proceso}"?`)) return;
-    const body = { master_code: diseno.masterCode, proceso: procForm.proceso, area: procForm.area, tiempo_minutos: Number(procForm.tiempoMinutos) || 0, notas: procForm.notas, orden: procesos.length };
+  async function addSubgrupo(grupoKey) {
+    const nombre = (nuevoSubgrupo[grupoKey] || "").trim();
+    if (!nombre) return;
     try {
-      if (editingProcId) {
-        const [row] = await sb(`produccion_procesos?id=eq.${editingProcId}`, { method: "PATCH", body: JSON.stringify(body) });
-        setProcesos(prev => prev.map(p => p.id === editingProcId ? procesoFromDB(row) : p));
-      } else {
-        const [row] = await sb("produccion_procesos", { method: "POST", body: JSON.stringify(body) });
-        setProcesos(prev => [...prev, procesoFromDB(row)]);
-      }
-      cancelEditProceso();
+      const [row] = await sb("produccion_confeccion_subgrupos", {
+        method: "POST",
+        body: JSON.stringify({ master_code: diseno.masterCode, grupo: grupoKey, nombre, orden: subgrupos.filter(s => s.grupo === grupoKey).length }),
+      });
+      setSubgrupos(prev => [...prev, subgrupoFromDB(row)]);
+      setNuevoSubgrupo(prev => ({ ...prev, [grupoKey]: "" }));
+    } catch (e) { alert("No se pudo crear el subgrupo: " + e.message); }
+  }
+  async function deleteSubgrupo(id, nombre) {
+    if (!window.confirm(`¿Eliminar el subgrupo "${nombre}"? También se borran sus operaciones. Esta acción no se puede deshacer.`)) return;
+    try {
+      await sb(`produccion_confeccion_subgrupos?id=eq.${id}`, { method: "DELETE" });
+      setSubgrupos(prev => prev.filter(s => s.id !== id));
+      setOperaciones(prev => prev.filter(o => o.subgrupoId !== id));
+    } catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  function nextNumero() {
+    return operaciones.length === 0 ? 1 : Math.max(...operaciones.map(o => o.numero || 0)) + 1;
+  }
+
+  async function addOperacion(subgrupoId, data) {
+    try {
+      const [row] = await sb("produccion_confeccion_operaciones", {
+        method: "POST",
+        body: JSON.stringify({
+          master_code: diseno.masterCode, subgrupo_id: subgrupoId, numero: nextNumero(),
+          descripcion: data.descripcion, maquina: data.maquina, minutos_std: Number(data.minutosStd) || 0, observaciones: data.observaciones,
+        }),
+      });
+      setOperaciones(prev => [...prev, operacionFromDB(row)]);
+    } catch (e) { alert("No se pudo agregar la operación: " + e.message); }
+  }
+  async function updateOperacion(id, data) {
+    if (!window.confirm(`¿Guardar los cambios en la operación #${data.numero}?`)) return;
+    try {
+      const [row] = await sb(`produccion_confeccion_operaciones?id=eq.${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ descripcion: data.descripcion, maquina: data.maquina, minutos_std: Number(data.minutosStd) || 0, observaciones: data.observaciones }),
+      });
+      setOperaciones(prev => prev.map(o => o.id === id ? operacionFromDB(row) : o));
     } catch (e) { alert("No se pudo guardar: " + e.message); }
   }
-  async function deleteProceso(id, proceso) {
-    if (!window.confirm(`¿Eliminar "${proceso}"? Esta acción no se puede deshacer.`)) return;
-    try { await sb(`produccion_procesos?id=eq.${id}`, { method: "DELETE" }); setProcesos(prev => prev.filter(p => p.id !== id)); if (editingProcId === id) cancelEditProceso(); }
+  async function deleteOperacion(id, numero) {
+    if (!window.confirm(`¿Eliminar la operación #${numero}? Esta acción no se puede deshacer.`)) return;
+    try { await sb(`produccion_confeccion_operaciones?id=eq.${id}`, { method: "DELETE" }); setOperaciones(prev => prev.filter(o => o.id !== id)); }
     catch (e) { alert("No se pudo eliminar: " + e.message); }
   }
 
-  const tiempoTotal = procesos.reduce((a, p) => a + p.tiempoMinutos, 0);
+  const tiempoTotal = operaciones.reduce((a, o) => a + o.minutosStd, 0);
 
   if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando...</div>;
 
   return (
     <div>
-      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Tiempos y procesos de producción</div>
-      {procesos.map(p => (
-        <LineItemRow key={p.id} onDelete={() => deleteProceso(p.id, p.proceso)} onEdit={() => startEditProceso(p)} fields={[
-          { value: p.proceso, flex: 1.3 },
-          { value: p.area || "—", flex: 1, muted: true },
-          { value: p.notas || "—", flex: 1.4, muted: true },
-          { value: `${p.tiempoMinutos} min`, flex: 0.8, mono: true },
-        ]} />
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 2 }}>Instrucciones de Confección</div>
+      <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "0 0 12px" }}>Cada operación recibe un número único y consecutivo, sin importar el grupo o subgrupo al que pertenezca.</p>
+
+      {GRUPOS_CONFECCION.map(grupo => (
+        <div key={grupo.key} style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: TOKENS.ink, background: TOKENS.amberSoft, padding: "6px 10px", borderRadius: 6, marginBottom: 10 }}>{grupo.label.toUpperCase()}</div>
+          {subgrupos.filter(s => s.grupo === grupo.key).map(sg => (
+            <SubgrupoBlock
+              key={sg.id}
+              subgrupo={sg}
+              operaciones={operaciones.filter(o => o.subgrupoId === sg.id)}
+              onAddOperacion={data => addOperacion(sg.id, data)}
+              onUpdateOperacion={updateOperacion}
+              onDeleteOperacion={deleteOperacion}
+              onDeleteSubgrupo={() => deleteSubgrupo(sg.id, sg.nombre)}
+            />
+          ))}
+          {subgrupos.filter(s => s.grupo === grupo.key).length === 0 && (
+            <div style={{ fontSize: 12, color: TOKENS.inkSoft, padding: "4px 0 10px" }}>Sin subgrupos todavía.</div>
+          )}
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              style={{ ...miniInput, flex: 1, maxWidth: 240 }} placeholder="Nombre del subgrupo (ej. Corte)"
+              value={nuevoSubgrupo[grupo.key] || ""} onChange={e => setNuevoSubgrupo(prev => ({ ...prev, [grupo.key]: e.target.value }))}
+            />
+            <button onClick={() => addSubgrupo(grupo.key)} style={{ ...iconBtn, background: TOKENS.panel, border: `1px dashed ${TOKENS.inkSoft}`, color: TOKENS.inkSoft, width: "auto", padding: "0 10px", gap: 6, display: "flex", alignItems: "center", fontSize: 11.5 }}>
+              <Plus size={13} /> Subgrupo
+            </button>
+          </div>
+        </div>
       ))}
-      {procesos.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin procesos agregados.</div>}
-      {editingProcId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando proceso...</div>}
-      <div style={{ display: "flex", gap: 6, marginTop: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Proceso (ej. Corte)" value={procForm.proceso} onChange={e => setProcForm(f => ({ ...f, proceso: e.target.value }))} />
-        <input style={{ ...miniInput, flex: 1 }} placeholder="Área / responsable" value={procForm.area} onChange={e => setProcForm(f => ({ ...f, area: e.target.value }))} />
-        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Notas" value={procForm.notas} onChange={e => setProcForm(f => ({ ...f, notas: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" step="any" min="0" placeholder="Minutos" value={procForm.tiempoMinutos} onChange={e => setProcForm(f => ({ ...f, tiempoMinutos: e.target.value }))} />
-        <button onClick={submitProceso} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingProcId ? <Pencil size={13} /> : <Plus size={14} />}</button>
-        {editingProcId && <button onClick={cancelEditProceso} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
-      </div>
 
       <div style={{ background: TOKENS.bg, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: TOKENS.inkSoft }}>Tiempo total de producción</span>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: TOKENS.inkSoft }}>Tiempo total de producción (todas las operaciones)</span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 700 }}>{tiempoTotal} min</span>
+      </div>
+    </div>
+  );
+}
+
+function SubgrupoBlock({ subgrupo, operaciones, onAddOperacion, onUpdateOperacion, onDeleteOperacion, onDeleteSubgrupo }) {
+  const [form, setForm] = useState({ descripcion: "", maquina: "", minutosStd: "", observaciones: "" });
+  const [editingId, setEditingId] = useState(null);
+
+  function startEdit(o) {
+    setEditingId(o.id);
+    setForm({ descripcion: o.descripcion, maquina: o.maquina || "", minutosStd: String(o.minutosStd), observaciones: o.observaciones || "" });
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setForm({ descripcion: "", maquina: "", minutosStd: "", observaciones: "" });
+  }
+  function submit() {
+    if (!form.descripcion.trim() || form.minutosStd === "") return;
+    if (editingId) {
+      const op = operaciones.find(o => o.id === editingId);
+      onUpdateOperacion(editingId, { ...form, numero: op?.numero });
+    } else {
+      onAddOperacion(form);
+    }
+    cancelEdit();
+  }
+
+  return (
+    <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 7, padding: 10, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>{subgrupo.nombre}</span>
+        <button onClick={onDeleteSubgrupo} title="Eliminar subgrupo" style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft }}><Trash2 size={13} /></button>
+      </div>
+      {operaciones.map(o => (
+        <LineItemRow key={o.id} onDelete={() => onDeleteOperacion(o.id, o.numero)} onEdit={() => startEdit(o)} fields={[
+          { value: `#${o.numero}`, flex: 0.35, mono: true },
+          { value: o.descripcion, flex: 1.6 },
+          { value: o.maquina || "—", flex: 1, muted: true },
+          { value: `${o.minutosStd} min`, flex: 0.7, mono: true },
+          { value: o.observaciones || "—", flex: 1.2, muted: true },
+        ]} />
+      ))}
+      {operaciones.length === 0 && <div style={{ fontSize: 12, color: TOKENS.inkSoft, padding: "4px 0" }}>Sin operaciones todavía.</div>}
+      {editingId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 6 }}>Editando operación...</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+        <input style={{ ...miniInput, flex: 1.6 }} placeholder="Descripción de la operación" value={form.descripcion} onChange={e => setForm(f => ({ ...f, descripcion: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1 }} placeholder="Máquina" value={form.maquina} onChange={e => setForm(f => ({ ...f, maquina: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 90px" }} type="number" step="any" min="0" placeholder="Min. (STD)" value={form.minutosStd} onChange={e => setForm(f => ({ ...f, minutosStd: e.target.value }))} />
+        <input style={{ ...miniInput, flex: 1.2 }} placeholder="Observaciones" value={form.observaciones} onChange={e => setForm(f => ({ ...f, observaciones: e.target.value }))} />
+        <button onClick={submit} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingId && <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
       </div>
     </div>
   );
