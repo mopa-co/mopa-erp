@@ -1602,40 +1602,59 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     return pad * 2 + numLines * lineHeightMM(size);
   }
   function newPageIfNeeded(needed) {
-    if (y + needed > 278) { doc.addPage(); y = 14; drawRunningHeader(); }
+    // Hojas de continuación: solo siguen el contenido, sin repetir encabezados
+    if (y + needed > 278) { doc.addPage(); y = 14; }
   }
 
-  // --- Encabezado fijo con la información básica de la prenda (se repite en cada página) ---
-  function drawRunningHeader() {
+  // --- Tabla con la información básica de la prenda (debajo del título, solo en la hoja principal de la sección) ---
+  function drawInfoTable() {
     const catNombre = catalogs.categorias.find(c => c.cod === diseno.codCategoria)?.nombre || diseno.codCategoria || "—";
     const segNombre = catalogs.segmentos.find(c => c.cod === diseno.codSegmento)?.nombre || diseno.codSegmento || "—";
     const linNombre = catalogs.lineas.find(c => c.cod === diseno.codLinea)?.nombre || diseno.codLinea || "—";
     const disNombre = catalogs.disenos.find(c => c.cod === diseno.codDiseno)?.nombre || diseno.codDiseno || "—";
-    box(L, R - L, 13, { fill: true });
-    doc.setFont(undefined, "bold"); doc.setFontSize(9);
-    doc.text(String(form.nombre || diseno.nombre || "—").toUpperCase(), L + 2, y + 5, { maxWidth: R - L - 4 });
-    doc.setFont(undefined, "normal"); doc.setFontSize(6.8);
-    const line2 = `SKU: ${diseno.masterCode}   CATEGORÍA: ${catNombre}   SEGMENTO: ${segNombre}   LÍNEA: ${linNombre}   DISEÑO: ${disNombre}   CONSECUTIVO: ${diseno.consecutivo}   FECHA ELABORACIÓN: ${form.fechaElaboracion || "—"}`;
-    doc.text(line2, L + 2, y + 10.2, { maxWidth: R - L - 4 });
-    y += 13 + 4;
+    const widths = [58, 42, 41, 41];
+    const rows = [
+      [["PRENDA", String(form.nombre || diseno.nombre || "—").toUpperCase()], ["SKU", diseno.masterCode], ["CATEGORÍA", catNombre], ["SEGMENTO", segNombre]],
+      [["LÍNEA", linNombre], ["DISEÑO", disNombre], ["CONSECUTIVO", diseno.consecutivo], ["FECHA ELABORACIÓN", form.fechaElaboracion || "—"]],
+    ];
+    rows.forEach(row => {
+      const labelH = 5;
+      let x = L;
+      row.forEach(([label], i) => {
+        box(x, widths[i], labelH, { fill: true });
+        cellText(x, widths[i], labelH, label, { bold: true, size: 6.2, align: "center" });
+        x += widths[i];
+      });
+      y += labelH;
+      const valueLines = row.map(([, v], i) => lines(v, widths[i] - 3, 7.3));
+      const valueH = Math.max(6.5, ...valueLines.map(l => neededH(l.length, 7.3)));
+      x = L;
+      row.forEach((_, i) => {
+        box(x, widths[i], valueH);
+        cellLines(x, widths[i], valueH, valueLines[i], { size: 7.3 });
+        x += widths[i];
+      });
+      y += valueH;
+    });
+    y += 5;
   }
 
   let sectionStarted = false;
-  function startSection(title) {
-    if (sectionStarted) { doc.addPage(); y = 14; }
+  function startSection(title, { withInfo = false } = {}) {
+    if (sectionStarted) doc.addPage();
     sectionStarted = true;
-    drawRunningHeader();
+    y = 10;
+    // Marca en la primera hoja de cada sección: empresa a la izquierda, marca a la derecha
+    doc.setFont(undefined, "bold"); doc.setFontSize(8);
+    doc.text("INDUSTRIA TEXTIL DE NARIÑO SAS", L, y);
+    doc.setFontSize(13);
+    doc.text("MOPA", R, y, { align: "right" });
+    y += 7;
     doc.setFont(undefined, "bold"); doc.setFontSize(12);
     doc.text(title, (L + R) / 2, y, { align: "center" });
-    y += 8;
+    y += 7;
+    if (withInfo) drawInfoTable();
   }
-
-  // Marca de la empresa (solo en la portada, arriba de todo)
-  doc.setFont(undefined, "bold"); doc.setFontSize(8);
-  doc.text("INDUSTRIA TEXTIL DE NARIÑO SAS", L, 10);
-  doc.setFontSize(13);
-  doc.text("MOPA", R, 10, { align: "right" });
-  y = 16;
 
   startSection("FICHA TÉCNICA DE DISEÑO");
 
@@ -1724,7 +1743,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   });
 
   // Insumos y Producción arranca siempre en página nueva, con el encabezado fijo repetido
-  startSection("INSUMOS Y PRODUCCIÓN");
+  startSection("INSUMOS Y PRODUCCIÓN", { withInfo: true });
 
   // --- Helper genérico para las tablas de Insumos y Producción ---
   function drawSectionTable(title, columns, rows) {
@@ -1809,7 +1828,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   );
 
   // --- Tiempos y Ruta Operacional: página independiente ---
-  startSection("TIEMPOS Y RUTA OPERACIONAL");
+  startSection("TIEMPOS Y RUTA OPERACIONAL", { withInfo: true });
   const tiempoTotalPdf = procesos.reduce((a, p) => a + (Number(p.tiempo_minutos) || 0), 0);
   drawSectionTable(
     "TIEMPOS Y PROCESOS DE PRODUCCIÓN",
