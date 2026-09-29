@@ -159,6 +159,16 @@ const procesoFromDB = (r) => ({ id: r.id, proceso: r.proceso, area: r.area, tiem
 const subgrupoFromDB = (r) => ({ id: r.id, grupo: r.grupo, nombre: r.nombre, orden: r.orden });
 const operacionFromDB = (r) => ({ id: r.id, subgrupoId: r.subgrupo_id, numero: r.numero, descripcion: r.descripcion, maquina: r.maquina, minutosStd: Number(r.minutos_std) || 0, observaciones: r.observaciones });
 const requerimientoFromDB = (r) => ({ id: r.id, requerimiento: r.requerimiento, orden: r.orden });
+const TALLA_KEYS = [1, 2, 3, 4, 5, 6, 7];
+const medidasConfigFromDB = (r) => ({
+  talla1: r.talla1 || "", talla2: r.talla2 || "", talla3: r.talla3 || "", talla4: r.talla4 || "",
+  talla5: r.talla5 || "", talla6: r.talla6 || "", talla7: r.talla7 || "",
+});
+const medidaFilaFromDB = (r) => ({
+  id: r.id, numero: r.numero, medida: r.medida, tolerancia: r.tolerancia, comoMedir: r.como_medir,
+  valorTalla1: r.valor_talla1 || "", valorTalla2: r.valor_talla2 || "", valorTalla3: r.valor_talla3 || "", valorTalla4: r.valor_talla4 || "",
+  valorTalla5: r.valor_talla5 || "", valorTalla6: r.valor_talla6 || "", valorTalla7: r.valor_talla7 || "",
+});
 const DEFAULT_REQUERIMIENTOS_CALIDAD = [
   "VERIFICAR MEDIDAS SEGÚN TABLA DE PATRONAJE",
   "MANTENER PAREJO EL ANCHO DE PRETINA Y PUÑOS",
@@ -1875,6 +1885,31 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   cellText(L, R - L, 7, `TIEMPO TOTAL DE PRODUCCIÓN (TODAS LAS OPERACIONES): ${tiempoTotalPdf} MIN`, { bold: true, size: 8 });
   y += 7;
 
+  // --- Tabla de Medidas: página independiente ---
+  const [cfgRows, medidaFilas] = await Promise.all([
+    sb(`tabla_medidas_config?master_code=eq.${mc}&select=*`, { method: "GET" }),
+    sb(`tabla_medidas_filas?master_code=eq.${mc}&select=*&order=numero.asc,created_at.asc`, { method: "GET" }),
+  ]);
+  const cfg = cfgRows[0] || {};
+  startSection("TABLA DE MEDIDAS", { withInfo: true });
+  const tallaW = 15;
+  const medidasCols = [
+    { key: "numero", w: 10, label: "#" },
+    { key: "medida", w: 32, label: "MEDIDAS" },
+    { key: "tolerancia", w: 16, label: "TOLERANCIA" },
+    ...TALLA_KEYS.map(k => ({ key: `t${k}`, w: tallaW, label: (cfg[`talla${k}`] || `T${k}`).toUpperCase() })),
+    { key: "comoMedir", w: R - L - (10 + 32 + 16 + tallaW * 7), label: "CÓMO MEDIR" },
+  ];
+  drawSectionTable(
+    "TABLA DE MEDIDAS",
+    medidasCols,
+    medidaFilas.map(f => {
+      const row = { numero: `${f.numero}`, medida: f.medida, tolerancia: f.tolerancia, comoMedir: f.como_medir };
+      TALLA_KEYS.forEach(k => { row[`t${k}`] = f[`valor_talla${k}`]; });
+      return row;
+    })
+  );
+
   // --- Calidad y Anexos: página independiente ---
   const requerimientos = await sb(`calidad_requerimientos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
   startSection("CALIDAD Y ANEXOS", { withInfo: true });
@@ -2418,11 +2453,13 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
         <TabBtn active={tab === "insumos"} onClick={() => setTab("insumos")} icon={<ClipboardList size={14} />}>Insumos y Producción</TabBtn>
         <TabBtn active={tab === "tiempos"} onClick={() => setTab("tiempos")} icon={<Factory size={14} />}>Tiempos y Ruta Operacional</TabBtn>
         <TabBtn active={tab === "calidad"} onClick={() => setTab("calidad")} icon={<ShieldCheck size={14} />}>Calidad y Anexos</TabBtn>
+        <TabBtn active={tab === "medidas"} onClick={() => setTab("medidas")} icon={<Ruler size={14} />}>Tabla de Medidas</TabBtn>
       </div>
 
       {tab === "insumos" && <InsumosProduccionPanel diseno={diseno} catalogs={catalogs} />}
       {tab === "tiempos" && <TiemposRutaPanel diseno={diseno} />}
       {tab === "calidad" && <CalidadAnexosPanel diseno={diseno} />}
+      {tab === "medidas" && <TablaMedidasPanel diseno={diseno} />}
 
       {tab === "ficha" && (
         <>
@@ -3014,6 +3051,134 @@ function CalidadAnexosPanel({ diseno }) {
       <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
         <input style={{ ...input, flex: 1 }} placeholder="Nuevo requerimiento de calidad" value={nuevo} onChange={e => setNuevo(e.target.value)} />
         <button onClick={addItem} style={{ ...btnPrimary, flexShrink: 0 }}><Plus size={15} /> Agregar</button>
+      </div>
+    </div>
+  );
+}
+
+function TablaMedidasPanel({ diseno }) {
+  const [config, setConfig] = useState({ talla1: "", talla2: "", talla3: "", talla4: "", talla5: "", talla6: "", talla7: "" });
+  const [filas, setFilas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const emptyForm = () => ({ medida: "", tolerancia: "", comoMedir: "", valorTalla1: "", valorTalla2: "", valorTalla3: "", valorTalla4: "", valorTalla5: "", valorTalla6: "", valorTalla7: "" });
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const mc = encodeURIComponent(diseno.masterCode);
+      const [cfgRows, filaRows] = await Promise.all([
+        sb(`tabla_medidas_config?master_code=eq.${mc}&select=*`, { method: "GET" }),
+        sb(`tabla_medidas_filas?master_code=eq.${mc}&select=*&order=numero.asc,created_at.asc`, { method: "GET" }),
+      ]);
+      setConfig(cfgRows[0] ? medidasConfigFromDB(cfgRows[0]) : { talla1: "", talla2: "", talla3: "", talla4: "", talla5: "", talla6: "", talla7: "" });
+      setFilas(filaRows.map(medidaFilaFromDB));
+    } catch (e) {
+      alert("No se pudo cargar la tabla de medidas: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, [diseno?.masterCode]);
+
+  async function guardarConfig() {
+    setSavingConfig(true);
+    try {
+      const [row] = await sb(`tabla_medidas_config?on_conflict=master_code`, {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+        body: JSON.stringify({ master_code: diseno.masterCode, ...config }),
+      });
+      setConfig(medidasConfigFromDB(row));
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+    finally { setSavingConfig(false); }
+  }
+
+  function nextNumero() {
+    return filas.length === 0 ? 1 : Math.max(...filas.map(f => f.numero || 0)) + 1;
+  }
+
+  function startEdit(f) {
+    setEditingId(f.id);
+    setForm({
+      medida: f.medida, tolerancia: f.tolerancia || "", comoMedir: f.comoMedir || "",
+      valorTalla1: f.valorTalla1, valorTalla2: f.valorTalla2, valorTalla3: f.valorTalla3, valorTalla4: f.valorTalla4,
+      valorTalla5: f.valorTalla5, valorTalla6: f.valorTalla6, valorTalla7: f.valorTalla7,
+    });
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(emptyForm());
+  }
+  async function submit() {
+    if (!form.medida.trim()) return;
+    if (editingId && !window.confirm(`¿Guardar los cambios en "${form.medida}"?`)) return;
+    const body = {
+      medida: form.medida, tolerancia: form.tolerancia, como_medir: form.comoMedir,
+      valor_talla1: form.valorTalla1, valor_talla2: form.valorTalla2, valor_talla3: form.valorTalla3, valor_talla4: form.valorTalla4,
+      valor_talla5: form.valorTalla5, valor_talla6: form.valorTalla6, valor_talla7: form.valorTalla7,
+    };
+    try {
+      if (editingId) {
+        const [row] = await sb(`tabla_medidas_filas?id=eq.${editingId}`, { method: "PATCH", body: JSON.stringify(body) });
+        setFilas(prev => prev.map(f => f.id === editingId ? medidaFilaFromDB(row) : f));
+      } else {
+        const [row] = await sb("tabla_medidas_filas", { method: "POST", body: JSON.stringify({ master_code: diseno.masterCode, numero: nextNumero(), ...body }) });
+        setFilas(prev => [...prev, medidaFilaFromDB(row)]);
+      }
+      cancelEdit();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+  }
+  async function deleteFila(id, medida) {
+    if (!window.confirm(`¿Eliminar la medida "${medida}"? Esta acción no se puede deshacer.`)) return;
+    try { await sb(`tabla_medidas_filas?id=eq.${id}`, { method: "DELETE" }); setFilas(prev => prev.filter(f => f.id !== id)); if (editingId === id) cancelEdit(); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 2 }}>Tabla de Medidas</div>
+      <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "0 0 10px" }}>Define primero las 7 tallas de esta ficha (alfanuméricas o numéricas), luego agrega cada medida con su tolerancia, el valor por talla y cómo se mide.</p>
+
+      <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, marginBottom: 6 }}>Tallas de esta ficha</div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {TALLA_KEYS.map(k => (
+          <input key={k} style={{ ...miniInput, flex: "0 0 70px" }} placeholder={`T${k}`} value={config[`talla${k}`]} onChange={e => setConfig(c => ({ ...c, [`talla${k}`]: e.target.value }))} />
+        ))}
+        <button onClick={guardarConfig} disabled={savingConfig} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none", opacity: savingConfig ? 0.6 : 1 }}>
+          {savingConfig ? <Loader2 size={13} className="spin" /> : <Pencil size={13} />}
+        </button>
+      </div>
+
+      {filas.map(f => (
+        <LineItemRow key={f.id} onDelete={() => deleteFila(f.id, f.medida)} onEdit={() => startEdit(f)} fields={[
+          { value: `#${f.numero}`, flex: 0.35, mono: true },
+          { value: f.medida, flex: 1.2 },
+          { value: f.tolerancia || "—", flex: 0.7, muted: true },
+          ...TALLA_KEYS.map(k => ({ value: f[`valorTalla${k}`] || "—", flex: 0.45, mono: true, muted: true })),
+          { value: f.comoMedir || "—", flex: 1.2, muted: true },
+        ]} />
+      ))}
+      {filas.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin medidas agregadas.</div>}
+      {editingId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando medida...</div>}
+
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+        <input style={{ ...miniInput, flex: "1 1 140px" }} placeholder="Medida (ej. Contorno de pecho)" value={form.medida} onChange={e => setForm(f => ({ ...f, medida: e.target.value }))} />
+        <input style={{ ...miniInput, flex: "0 0 80px" }} placeholder="Tolerancia" value={form.tolerancia} onChange={e => setForm(f => ({ ...f, tolerancia: e.target.value }))} />
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+        {TALLA_KEYS.map(k => (
+          <input key={k} style={{ ...miniInput, flex: "0 0 60px" }} placeholder={config[`talla${k}`] || `T${k}`} value={form[`valorTalla${k}`]} onChange={e => setForm(f => ({ ...f, [`valorTalla${k}`]: e.target.value }))} />
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+        <input style={{ ...miniInput, flex: "1 1 200px" }} placeholder="Cómo medir" value={form.comoMedir} onChange={e => setForm(f => ({ ...f, comoMedir: e.target.value }))} />
+        <button onClick={submit} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+        {editingId && <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
       </div>
     </div>
   );
