@@ -1896,7 +1896,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   const medidasCols = [
     { key: "numero", w: 10, label: "#" },
     { key: "medida", w: 32, label: "MEDIDAS" },
-    { key: "tolerancia", w: 16, label: "TOLERANCIA" },
+    { key: "tolerancia", w: 16, label: "TOL" },
     ...TALLA_KEYS.map(k => ({ key: `t${k}`, w: tallaW, label: (cfg[`talla${k}`] || `T${k}`).toUpperCase() })),
     { key: "comoMedir", w: R - L - (10 + 32 + 16 + tallaW * 7), label: "CÓMO MEDIR" },
   ];
@@ -3083,13 +3083,13 @@ function TablaMedidasPanel({ diseno }) {
   }
   useEffect(() => { load(); }, [diseno?.masterCode]);
 
-  async function guardarConfig() {
+  async function guardarConfig(overrideConfig) {
     setSavingConfig(true);
     try {
       const [row] = await sb(`tabla_medidas_config?on_conflict=master_code`, {
         method: "POST",
         headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-        body: JSON.stringify({ master_code: diseno.masterCode, ...config }),
+        body: JSON.stringify({ master_code: diseno.masterCode, ...(overrideConfig || config) }),
       });
       setConfig(medidasConfigFromDB(row));
     } catch (e) { alert("No se pudo guardar: " + e.message); }
@@ -3145,14 +3145,22 @@ function TablaMedidasPanel({ diseno }) {
       <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "0 0 10px" }}>Define primero las 7 tallas de esta ficha (alfanuméricas o numéricas), luego agrega cada medida con su tolerancia, el valor por talla y cómo se mide.</p>
 
       <div style={{ fontSize: 11, fontWeight: 600, color: TOKENS.inkSoft, marginBottom: 6 }}>Tallas de esta ficha</div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
         {TALLA_KEYS.map(k => (
-          <input key={k} style={{ ...miniInput, flex: "0 0 70px" }} placeholder={`T${k}`} value={config[`talla${k}`]} onChange={e => setConfig(c => ({ ...c, [`talla${k}`]: e.target.value }))} />
+          <input
+            key={k} style={{ ...miniInput, flex: "0 0 70px" }} placeholder={`Talla ${k}`} value={config[`talla${k}`]}
+            onChange={e => setConfig(c => ({ ...c, [`talla${k}`]: e.target.value }))}
+            onBlur={e => guardarConfig({ ...config, [`talla${k}`]: e.target.value })}
+          />
         ))}
-        <button onClick={guardarConfig} disabled={savingConfig} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none", opacity: savingConfig ? 0.6 : 1 }}>
-          {savingConfig ? <Loader2 size={13} className="spin" /> : <Pencil size={13} />}
+        <button
+          onClick={() => guardarConfig()} disabled={savingConfig}
+          style={{ ...btnPrimary, padding: "0 12px", opacity: savingConfig ? 0.6 : 1 }}
+        >
+          {savingConfig ? <Loader2 size={13} className="spin" /> : <Pencil size={13} />} Guardar tallas
         </button>
       </div>
+      <p style={{ fontSize: 10, color: TOKENS.inkSoft, margin: "0 0 16px" }}>Se guardan solas al salir de cada casilla — el nombre de cada talla es el que va a aparecer en las columnas de la tabla y del PDF.</p>
 
       {filas.map(f => (
         <LineItemRow key={f.id} onDelete={() => deleteFila(f.id, f.medida)} onEdit={() => startEdit(f)} fields={[
