@@ -5,7 +5,7 @@ import { QRCodeCanvas } from "qrcode.react";
 import {
   Package, Plus, Search, ArrowDownCircle, ArrowUpCircle,
   X, History, Boxes, CircleDollarSign, TriangleAlert, Loader2, WifiOff, Settings2, Trash2,
-  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool, FileText, Upload, Image as ImageIcon, ClipboardList
+  Calculator, Sliders, Pencil, Warehouse, Ruler, Factory, Download, QrCode, LogOut, PenTool, FileText, Upload, Image as ImageIcon, ClipboardList, ShieldCheck
 } from "lucide-react";
 
 // --- Conexión a Supabase (proyecto: mopa-erp) ---
@@ -163,6 +163,22 @@ const GRUPOS_CONFECCION = [
   { key: "ensamble", label: "Ensamble" },
   { key: "terminados_acabados", label: "Terminados y Acabados" },
 ];
+const requerimientoFromDB = (r) => ({ id: r.id, requerimiento: r.requerimiento, orden: r.orden });
+const DEFAULT_REQUERIMIENTOS_CALIDAD = [
+  "VERIFICAR MEDIDAS SEGÚN TABLA DE PATRONAJE",
+  "MANTENER PAREJO EL ANCHO DE PRETINA Y PUÑOS",
+  "CONSERVAR SIMETRÍA EN PEGUES DEL TEJIDO",
+  "CALIBRAR MÁQUINAS, VERIFICAR PPP Y AGUJAS",
+  "REVISAR MEDIDAS TERMINADAS EN CONFECCIÓN Y ACABADOS",
+  "LAS COSTURAS NO DEBEN QUEDAR FRUNCIDAS NI ONDULADAS O TIRANTES",
+  "ACONDICIONAR MÁQUINAS. LAS COSTURAS DEBEN QUEDAR LIMPIAS, SIN RECOGIDOS Y AL ESTIRAR LA PRENDA A SU PUNTO MÁXIMO NO DEBEN REVENTAR LAS COSTURAS",
+  "NO HACER EMPATES Y CONSERVAR PAREJA LA COSTURA EN LOS PESPUNTES",
+  "RETIRAR TODOS LOS STICKERS, LA PRENDA SE DEBE ENTREGAR LIMPIA, SIN HEBRAS",
+  "VERIFICAR Y UTILIZAR PLANTILLAS QUE ENVÍA PATRONAJE (UBICACIÓN DE BOLSILLOS Y PESPUNTES)",
+  "AL REVISAR LA CALIDAD DE LA PRENDA EN CONFECCIÓN, SE DEBE VERIFICAR APARIENCIA DE COSTURAS, PESPUNTES DERECHOS, SIN EMPATES, SIMETRÍA DE PIEZAS, SIN SALTOS DE COSTURA, SIN PIQUES DE COSTURA (VALIDAR CON LISTA DE VERIFICACIÓN DEFECTOS DE CALIDAD)",
+  "UTILIZAR PIES GUÍA O FOLDER",
+];
+
 
 async function uploadDisenoFile(masterCode, file, prefix) {
   const path = `${encodeURIComponent(masterCode)}/${prefix}_${Date.now()}_${encodeURIComponent(file.name)}`;
@@ -1859,6 +1875,21 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   cellText(L, R - L, 7, `TIEMPO TOTAL DE PRODUCCIÓN (TODAS LAS OPERACIONES): ${tiempoTotalPdf} MIN`, { bold: true, size: 8 });
   y += 7;
 
+  // --- Calidad y Anexos: página independiente ---
+  const requerimientos = await sb(`calidad_requerimientos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
+  startSection("CALIDAD Y ANEXOS", { withInfo: true });
+  doc.setFont(undefined, "bold"); doc.setFontSize(9);
+  doc.text("REQUERIMIENTOS DE CALIDAD", L, y);
+  y += 6;
+  doc.setFont(undefined, "normal"); doc.setFontSize(8);
+  requerimientos.forEach((r, i) => {
+    const split = lines(`${i + 1}. ${r.requerimiento}`, R - L - 4, 8);
+    const rH = neededH(split.length, 8, 1);
+    newPageIfNeeded(rH);
+    doc.text(split, L + 2, y + 3);
+    y += rH;
+  });
+
   // --- Elaborado por ---
   newPageIfNeeded(7);
   box(L, R - L, 7, { fill: true });
@@ -2392,10 +2423,12 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
         <TabBtn active={tab === "ficha"} onClick={() => setTab("ficha")} icon={<FileText size={14} />}>Ficha Técnica de Diseño</TabBtn>
         <TabBtn active={tab === "insumos"} onClick={() => setTab("insumos")} icon={<ClipboardList size={14} />}>Insumos y Producción</TabBtn>
         <TabBtn active={tab === "tiempos"} onClick={() => setTab("tiempos")} icon={<Factory size={14} />}>Tiempos y Ruta Operacional</TabBtn>
+        <TabBtn active={tab === "calidad"} onClick={() => setTab("calidad")} icon={<ShieldCheck size={14} />}>Calidad y Anexos</TabBtn>
       </div>
 
       {tab === "insumos" && <InsumosProduccionPanel diseno={diseno} catalogs={catalogs} />}
       {tab === "tiempos" && <TiemposRutaPanel diseno={diseno} />}
+      {tab === "calidad" && <CalidadAnexosPanel diseno={diseno} />}
 
       {tab === "ficha" && (
         <>
@@ -2891,6 +2924,102 @@ function GenericBomSection({ title, help, table, masterCode, fields }) {
         ))}
         <button onClick={submit} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingId ? <Pencil size={13} /> : <Plus size={14} />}</button>
         {editingId && <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
+      </div>
+    </div>
+  );
+}
+
+function CalidadAnexosPanel({ diseno }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [nuevo, setNuevo] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const mc = encodeURIComponent(diseno.masterCode);
+      let rows = await sb(`calidad_requerimientos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
+      if (rows.length === 0) {
+        // Primera vez que se abre esta ficha: precargamos los requerimientos predeterminados
+        const seedBody = DEFAULT_REQUERIMIENTOS_CALIDAD.map((r, i) => ({ master_code: diseno.masterCode, requerimiento: r, orden: i }));
+        rows = await sb("calidad_requerimientos", { method: "POST", body: JSON.stringify(seedBody) });
+      }
+      setItems(rows.map(requerimientoFromDB));
+    } catch (e) {
+      alert("No se pudo cargar los requerimientos: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, [diseno?.masterCode]);
+
+  async function addItem() {
+    if (!nuevo.trim()) return;
+    try {
+      const [row] = await sb("calidad_requerimientos", {
+        method: "POST",
+        body: JSON.stringify({ master_code: diseno.masterCode, requerimiento: nuevo.toUpperCase(), orden: items.length }),
+      });
+      setItems(prev => [...prev, requerimientoFromDB(row)]);
+      setNuevo("");
+    } catch (e) { alert("No se pudo agregar: " + e.message); }
+  }
+  function startEdit(it) {
+    setEditingId(it.id);
+    setEditText(it.requerimiento);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditText("");
+  }
+  async function saveEdit() {
+    if (!editText.trim()) return;
+    if (!window.confirm("¿Guardar los cambios en este requerimiento?")) return;
+    try {
+      const [row] = await sb(`calidad_requerimientos?id=eq.${editingId}`, { method: "PATCH", body: JSON.stringify({ requerimiento: editText.toUpperCase() }) });
+      setItems(prev => prev.map(i => i.id === editingId ? requerimientoFromDB(row) : i));
+      cancelEdit();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+  }
+  async function deleteItem(id) {
+    if (!window.confirm("¿Eliminar este requerimiento? Esta acción no se puede deshacer.")) return;
+    try { await sb(`calidad_requerimientos?id=eq.${id}`, { method: "DELETE" }); setItems(prev => prev.filter(i => i.id !== id)); if (editingId === id) cancelEdit(); }
+    catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+
+  if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 2 }}>Requerimientos de Calidad</div>
+      <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "0 0 10px" }}>Vienen precargados con los estándares generales de calidad. Puedes editarlos, eliminarlos o agregar más.</p>
+      {items.map((it, i) => (
+        <div key={it.id} style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 7, padding: "8px 10px", marginBottom: 8 }}>
+          {editingId === it.id ? (
+            <div>
+              <textarea style={{ ...input, minHeight: 50, resize: "vertical", marginBottom: 8 }} value={editText} onChange={e => setEditText(e.target.value)} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={saveEdit} style={{ ...btnPrimary, flex: 1, justifyContent: "center", padding: "6px 0" }}>Guardar</button>
+                <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={14} /></button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: TOKENS.inkSoft, flexShrink: 0, marginTop: 1 }}>{i + 1}.</span>
+              <span style={{ fontSize: 12.5, flex: 1, lineHeight: 1.5 }}>{it.requerimiento}</span>
+              <button onClick={() => startEdit(it)} style={{ ...iconBtn, width: 26, height: 26, flexShrink: 0 }}><Pencil size={12} /></button>
+              <button onClick={() => deleteItem(it.id)} style={{ ...iconBtn, width: 26, height: 26, flexShrink: 0 }}><Trash2 size={12} /></button>
+            </div>
+          )}
+        </div>
+      ))}
+      {items.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin requerimientos todavía.</div>}
+
+      <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+        <input style={{ ...input, flex: 1 }} placeholder="Nuevo requerimiento de calidad" value={nuevo} onChange={e => setNuevo(e.target.value)} />
+        <button onClick={addItem} style={{ ...btnPrimary, flexShrink: 0 }}><Plus size={15} /> Agregar</button>
       </div>
     </div>
   );
