@@ -989,7 +989,7 @@ function LineItemRow({ item, fields, onDelete, onEdit }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${TOKENS.border}`, fontSize: 12.5 }}>
       {fields.map((f, i) => (
-        <div key={i} style={{ flex: f.flex || 1, color: f.muted ? TOKENS.inkSoft : TOKENS.ink, fontFamily: f.mono ? "'IBM Plex Mono', monospace" : "inherit" }}>{f.value}</div>
+        <div key={i} style={{ flex: f.flex || 1, color: f.muted ? TOKENS.inkSoft : TOKENS.ink, fontFamily: f.mono ? "'IBM Plex Mono', monospace" : "inherit", textAlign: f.align || "left" }}>{f.value}</div>
       ))}
       <button onClick={onEdit} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft, flexShrink: 0 }}><Pencil size={13} /></button>
       <button onClick={onDelete} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft, flexShrink: 0 }}><Trash2 size={13} /></button>
@@ -1625,10 +1625,11 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     doc.text(String(text ?? "—"), tx, y + h / 2 + size * 0.12, { align, maxWidth: w - pad * 2 });
   }
   // Celda multilínea, alineada arriba, para textos que pueden ocupar más de 1 renglón
-  function cellLines(x, w, h, textLines, { bold, size = 7.2, pad = 1.8 } = {}) {
+  function cellLines(x, w, h, textLines, { bold, size = 7.2, pad = 1.8, align = "left" } = {}) {
     doc.setFont(undefined, bold ? "bold" : "normal");
     doc.setFontSize(size);
-    doc.text(textLines, x + pad, y + pad + size * MM_PER_PT * 0.85);
+    const tx = align === "center" ? x + w / 2 : x + pad;
+    doc.text(textLines, tx, y + pad + size * MM_PER_PT * 0.85, align === "center" ? { align: "center" } : undefined);
   }
   // Alto necesario para una celda con N líneas a un tamaño dado
   function neededH(numLines, size, pad = 1.8) {
@@ -1797,7 +1798,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
       const colLines = cols.map(c => lines(row[c.key], c.w - 3, 6.8));
       const rH = Math.max(7, ...colLines.map(l => neededH(l.length, 6.8)));
       newPageIfNeeded(rH);
-      cols.forEach((c, i) => { box(c.x, c.w, rH); cellLines(c.x, c.w, rH, colLines[i], { size: 6.8 }); });
+      cols.forEach((c, i) => { box(c.x, c.w, rH); cellLines(c.x, c.w, rH, colLines[i], { size: 6.8, align: c.center ? "center" : "left" }); });
       y += rH;
     });
     y += 4;
@@ -1885,31 +1886,6 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   cellText(L, R - L, 7, `TIEMPO TOTAL DE PRODUCCIÓN (TODAS LAS OPERACIONES): ${tiempoTotalPdf} MIN`, { bold: true, size: 8 });
   y += 7;
 
-  // --- Tabla de Medidas: página independiente ---
-  const [cfgRows, medidaFilas] = await Promise.all([
-    sb(`tabla_medidas_config?master_code=eq.${mc}&select=*`, { method: "GET" }),
-    sb(`tabla_medidas_filas?master_code=eq.${mc}&select=*&order=numero.asc,created_at.asc`, { method: "GET" }),
-  ]);
-  const cfg = cfgRows[0] || {};
-  startSection("TABLA DE MEDIDAS", { withInfo: true });
-  const tallaW = 15;
-  const medidasCols = [
-    { key: "numero", w: 10, label: "#" },
-    { key: "medida", w: 32, label: "MEDIDAS" },
-    { key: "tolerancia", w: 16, label: "TOL" },
-    ...TALLA_KEYS.map(k => ({ key: `t${k}`, w: tallaW, label: (cfg[`talla${k}`] || `T${k}`).toUpperCase() })),
-    { key: "comoMedir", w: R - L - (10 + 32 + 16 + tallaW * 7), label: "CÓMO MEDIR" },
-  ];
-  drawSectionTable(
-    "TABLA DE MEDIDAS",
-    medidasCols,
-    medidaFilas.map(f => {
-      const row = { numero: `${f.numero}`, medida: f.medida, tolerancia: f.tolerancia, comoMedir: f.como_medir };
-      TALLA_KEYS.forEach(k => { row[`t${k}`] = f[`valor_talla${k}`]; });
-      return row;
-    })
-  );
-
   // --- Calidad y Anexos: página independiente ---
   const requerimientos = await sb(`calidad_requerimientos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
   startSection("CALIDAD Y ANEXOS", { withInfo: true });
@@ -1917,6 +1893,33 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     "REQUERIMIENTOS DE CALIDAD",
     [{ key: "numero", w: 14, label: "#" }, { key: "requerimiento", w: R - L - 14, label: "REQUERIMIENTO" }],
     requerimientos.map((r, i) => ({ numero: `${i + 1}`, requerimiento: r.requerimiento }))
+  );
+
+  // --- Tabla de Medidas: página independiente ---
+  const [cfgRows, medidaFilas] = await Promise.all([
+    sb(`tabla_medidas_config?master_code=eq.${mc}&select=*`, { method: "GET" }),
+    sb(`tabla_medidas_filas?master_code=eq.${mc}&select=*&order=numero.asc,created_at.asc`, { method: "GET" }),
+  ]);
+  const cfg = cfgRows[0] || {};
+  const activeTallaKeys = TALLA_KEYS.filter(k => (cfg[`talla${k}`] || "").trim());
+  startSection("TABLA DE MEDIDAS", { withInfo: true });
+  const anchoFijo = 10 + 32 + 16;
+  const tallaW = activeTallaKeys.length > 0 ? Math.max(14, (R - L - anchoFijo - 40) / activeTallaKeys.length) : 0;
+  const medidasCols = [
+    { key: "numero", w: 10, label: "#", center: true },
+    { key: "medida", w: 32, label: "MEDIDAS" },
+    { key: "tolerancia", w: 16, label: "TOL", center: true },
+    ...activeTallaKeys.map(k => ({ key: `t${k}`, w: tallaW, label: cfg[`talla${k}`].toUpperCase(), center: true })),
+    { key: "comoMedir", w: R - L - anchoFijo - tallaW * activeTallaKeys.length, label: "CÓMO MEDIR" },
+  ];
+  drawSectionTable(
+    "TABLA DE MEDIDAS",
+    medidasCols,
+    medidaFilas.map(f => {
+      const row = { numero: `${f.numero}`, medida: f.medida, tolerancia: f.tolerancia, comoMedir: f.como_medir };
+      activeTallaKeys.forEach(k => { row[`t${k}`] = f[`valor_talla${k}`]; });
+      return row;
+    })
   );
 
   // --- Elaborado por ---
@@ -3162,32 +3165,46 @@ function TablaMedidasPanel({ diseno }) {
       </div>
       <p style={{ fontSize: 10, color: TOKENS.inkSoft, margin: "0 0 16px" }}>Se guardan solas al salir de cada casilla — el nombre de cada talla es el que va a aparecer en las columnas de la tabla y del PDF.</p>
 
-      {filas.map(f => (
-        <LineItemRow key={f.id} onDelete={() => deleteFila(f.id, f.medida)} onEdit={() => startEdit(f)} fields={[
-          { value: `#${f.numero}`, flex: 0.35, mono: true },
-          { value: f.medida, flex: 1.2 },
-          { value: f.tolerancia || "—", flex: 0.7, muted: true },
-          ...TALLA_KEYS.map(k => ({ value: f[`valorTalla${k}`] || "—", flex: 0.45, mono: true, muted: true })),
-          { value: f.comoMedir || "—", flex: 1.2, muted: true },
-        ]} />
-      ))}
-      {filas.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin medidas agregadas.</div>}
-      {editingId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando medida...</div>}
+      {(() => {
+        const activeTallas = TALLA_KEYS.filter(k => (config[`talla${k}`] || "").trim());
+        return (
+          <>
+            {filas.map(f => (
+              <LineItemRow key={f.id} onDelete={() => deleteFila(f.id, f.medida)} onEdit={() => startEdit(f)} fields={[
+                { value: `#${f.numero}`, flex: 0.35, mono: true },
+                { value: f.medida, flex: 1.2 },
+                { value: f.tolerancia || "—", flex: 0.6, muted: true, align: "center" },
+                ...activeTallas.map(k => ({ value: f[`valorTalla${k}`] || "—", flex: 0.5, mono: true, muted: true, align: "center" })),
+                { value: f.comoMedir || "—", flex: 1.2, muted: true },
+              ]} />
+            ))}
+            {filas.length === 0 && <div style={{ fontSize: 12.5, color: TOKENS.inkSoft, padding: "6px 0" }}>Sin medidas agregadas.</div>}
+            {editingId && <div style={{ fontSize: 11, color: TOKENS.amber, fontWeight: 600, marginTop: 8 }}>Editando medida...</div>}
 
-      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-        <input style={{ ...miniInput, flex: "1 1 140px" }} placeholder="Medida (ej. Contorno de pecho)" value={form.medida} onChange={e => setForm(f => ({ ...f, medida: e.target.value }))} />
-        <input style={{ ...miniInput, flex: "0 0 80px" }} placeholder="Tolerancia" value={form.tolerancia} onChange={e => setForm(f => ({ ...f, tolerancia: e.target.value }))} />
-      </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-        {TALLA_KEYS.map(k => (
-          <input key={k} style={{ ...miniInput, flex: "0 0 60px" }} placeholder={config[`talla${k}`] || `T${k}`} value={form[`valorTalla${k}`]} onChange={e => setForm(f => ({ ...f, [`valorTalla${k}`]: e.target.value }))} />
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-        <input style={{ ...miniInput, flex: "1 1 200px" }} placeholder="Cómo medir" value={form.comoMedir} onChange={e => setForm(f => ({ ...f, comoMedir: e.target.value }))} />
-        <button onClick={submit} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingId ? <Pencil size={13} /> : <Plus size={14} />}</button>
-        {editingId && <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
-      </div>
+            <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+              <input style={{ ...miniInput, flex: "1 1 140px" }} placeholder="Medida (ej. Contorno de pecho)" value={form.medida} onChange={e => setForm(f => ({ ...f, medida: e.target.value }))} />
+              <input style={{ ...miniInput, flex: "0 0 80px" }} placeholder="Tolerancia" value={form.tolerancia} onChange={e => setForm(f => ({ ...f, tolerancia: e.target.value }))} />
+            </div>
+            {activeTallas.length === 0 ? (
+              <p style={{ fontSize: 10.5, color: TOKENS.amber, margin: "6px 0" }}>Define primero al menos una talla arriba para poder capturar sus valores.</p>
+            ) : (
+              <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                {activeTallas.map(k => (
+                  <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "0 0 60px" }}>
+                    <span style={{ fontSize: 9, color: TOKENS.inkSoft, marginBottom: 2 }}>{config[`talla${k}`]}</span>
+                    <input style={{ ...miniInput, width: "100%", textAlign: "center" }} value={form[`valorTalla${k}`]} onChange={e => setForm(f => ({ ...f, [`valorTalla${k}`]: e.target.value }))} />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+              <input style={{ ...miniInput, flex: "1 1 200px" }} placeholder="Cómo medir" value={form.comoMedir} onChange={e => setForm(f => ({ ...f, comoMedir: e.target.value }))} />
+              <button onClick={submit} style={{ ...iconBtn, background: TOKENS.ink, color: TOKENS.bg, border: "none" }}>{editingId ? <Pencil size={13} /> : <Plus size={14} />}</button>
+              {editingId && <button onClick={cancelEdit} style={{ ...iconBtn, border: `1px solid ${TOKENS.border}` }}><X size={13} /></button>}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }
