@@ -158,11 +158,6 @@ const consumoFromDB = (r) => ({
 const procesoFromDB = (r) => ({ id: r.id, proceso: r.proceso, area: r.area, tiempoMinutos: Number(r.tiempo_minutos) || 0, notas: r.notas, orden: r.orden });
 const subgrupoFromDB = (r) => ({ id: r.id, grupo: r.grupo, nombre: r.nombre, orden: r.orden });
 const operacionFromDB = (r) => ({ id: r.id, subgrupoId: r.subgrupo_id, numero: r.numero, descripcion: r.descripcion, maquina: r.maquina, minutosStd: Number(r.minutos_std) || 0, observaciones: r.observaciones });
-const GRUPOS_CONFECCION = [
-  { key: "preparacion", label: "Preparación" },
-  { key: "ensamble", label: "Ensamble" },
-  { key: "terminados_acabados", label: "Terminados y Acabados" },
-];
 const requerimientoFromDB = (r) => ({ id: r.id, requerimiento: r.requerimiento, orden: r.orden });
 const DEFAULT_REQUERIMIENTOS_CALIDAD = [
   "VERIFICAR MEDIDAS SEGÚN TABLA DE PATRONAJE",
@@ -171,12 +166,17 @@ const DEFAULT_REQUERIMIENTOS_CALIDAD = [
   "CALIBRAR MÁQUINAS, VERIFICAR PPP Y AGUJAS",
   "REVISAR MEDIDAS TERMINADAS EN CONFECCIÓN Y ACABADOS",
   "LAS COSTURAS NO DEBEN QUEDAR FRUNCIDAS NI ONDULADAS O TIRANTES",
-  "ACONDICIONAR MÁQUINAS. LAS COSTURAS DEBEN QUEDAR LIMPIAS, SIN RECOGIDOS Y AL ESTIRAR LA PRENDA A SU PUNTO MÁXIMO NO DEBEN REVENTAR LAS COSTURAS",
+  "ACONDICIONAR MÁQUINAS: LAS COSTURAS DEBEN QUEDAR LIMPIAS, SIN RECOGIDOS Y AL ESTIRAR LA PRENDA A SU PUNTO MÁXIMO NO DEBEN REVENTAR LAS COSTURAS",
   "NO HACER EMPATES Y CONSERVAR PAREJA LA COSTURA EN LOS PESPUNTES",
   "RETIRAR TODOS LOS STICKERS, LA PRENDA SE DEBE ENTREGAR LIMPIA, SIN HEBRAS",
   "VERIFICAR Y UTILIZAR PLANTILLAS QUE ENVÍA PATRONAJE (UBICACIÓN DE BOLSILLOS Y PESPUNTES)",
   "AL REVISAR LA CALIDAD DE LA PRENDA EN CONFECCIÓN, SE DEBE VERIFICAR APARIENCIA DE COSTURAS, PESPUNTES DERECHOS, SIN EMPATES, SIMETRÍA DE PIEZAS, SIN SALTOS DE COSTURA, SIN PIQUES DE COSTURA (VALIDAR CON LISTA DE VERIFICACIÓN DEFECTOS DE CALIDAD)",
   "UTILIZAR PIES GUÍA O FOLDER",
+];
+const GRUPOS_CONFECCION = [
+  { key: "preparacion", label: "Preparación" },
+  { key: "ensamble", label: "Ensamble" },
+  { key: "terminados_acabados", label: "Terminados y Acabados" },
 ];
 
 
@@ -1858,7 +1858,7 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     if (sgsDelGrupo.length === 0) return;
     newPageIfNeeded(6);
     doc.setFont(undefined, "bold"); doc.setFontSize(9);
-    doc.text(grupo.label.toUpperCase(), L, y);
+    doc.text(grupo.label.toUpperCase(), (L + R) / 2, y, { align: "center" });
     y += 5;
     sgsDelGrupo.forEach(sg => {
       const ops = operacionesConf.filter(o => o.subgrupo_id === sg.id).sort((a, b) => (a.numero || 0) - (b.numero || 0));
@@ -1878,17 +1878,11 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
   // --- Calidad y Anexos: página independiente ---
   const requerimientos = await sb(`calidad_requerimientos?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
   startSection("CALIDAD Y ANEXOS", { withInfo: true });
-  doc.setFont(undefined, "bold"); doc.setFontSize(9);
-  doc.text("REQUERIMIENTOS DE CALIDAD", L, y);
-  y += 6;
-  doc.setFont(undefined, "normal"); doc.setFontSize(8);
-  requerimientos.forEach((r, i) => {
-    const split = lines(`${i + 1}. ${r.requerimiento}`, R - L - 4, 8);
-    const rH = neededH(split.length, 8, 1);
-    newPageIfNeeded(rH);
-    doc.text(split, L + 2, y + 3);
-    y += rH;
-  });
+  drawSectionTable(
+    "REQUERIMIENTOS DE CALIDAD",
+    [{ key: "numero", w: 14, label: "#" }, { key: "requerimiento", w: R - L - 14, label: "REQUERIMIENTO" }],
+    requerimientos.map((r, i) => ({ numero: `${i + 1}`, requerimiento: r.requerimiento }))
+  );
 
   // --- Elaborado por ---
   newPageIfNeeded(7);
