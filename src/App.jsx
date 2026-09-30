@@ -169,6 +169,7 @@ const medidaFilaFromDB = (r) => ({
   valorTalla1: r.valor_talla1 || "", valorTalla2: r.valor_talla2 || "", valorTalla3: r.valor_talla3 || "", valorTalla4: r.valor_talla4 || "",
   valorTalla5: r.valor_talla5 || "", valorTalla6: r.valor_talla6 || "", valorTalla7: r.valor_talla7 || "",
 });
+const imagenDetalleFromDB = (r) => ({ id: r.id, nombre: r.nombre || "", fotoUrl: r.foto_url, orden: r.orden });
 const DEFAULT_REQUERIMIENTOS_CALIDAD = [
   "VERIFICAR MEDIDAS SEGÚN TABLA DE PATRONAJE",
   "MANTENER PAREJO EL ANCHO DE PRETINA Y PUÑOS",
@@ -1922,6 +1923,44 @@ async function buildFichaPDF(diseno, form, composiciones, catalogs) {
     })
   );
 
+  // --- Fotos detalladas de la prenda: 4 por página ---
+  const imagenesDetalle = await sb(`disenos_imagenes_detalle?master_code=eq.${mc}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
+  if (imagenesDetalle.length > 0) {
+    startSection("FOTOS DETALLADAS DE LA PRENDA", { withInfo: true });
+    const cols = 2, gap = 8;
+    const boxW = (R - L - gap) / cols;
+    const boxH = 92;
+    const capH = 8;
+    const cellH = boxH + capH + gap;
+    for (let i = 0; i < imagenesDetalle.length; i++) {
+      const posEnPagina = i % 4;
+      if (posEnPagina === 0 && i !== 0) { doc.addPage(); y = 14; }
+      const col = posEnPagina % cols;
+      const row = Math.floor(posEnPagina / cols);
+      const cellX = L + col * (boxW + gap);
+      const cellY = y + row * cellH;
+      doc.setDrawColor(90, 100, 115); doc.setLineWidth(0.2);
+      doc.rect(cellX, cellY, boxW, boxH);
+      const img = imagenesDetalle[i];
+      if (img.foto_url) {
+        try {
+          const { dataUrl, width, height } = await fetchImagePng(img.foto_url);
+          const maxW = boxW - 6, maxH = boxH - 6;
+          const ratio = Math.min(maxW / width, maxH / height);
+          const w = width * ratio, h = height * ratio;
+          doc.addImage(dataUrl, "PNG", cellX + (boxW - w) / 2, cellY + (boxH - h) / 2, w, h);
+        } catch {
+          doc.setFont(undefined, "italic"); doc.setFontSize(7.5);
+          doc.text("(No se pudo cargar la foto)", cellX + boxW / 2, cellY + boxH / 2, { align: "center" });
+        }
+      }
+      doc.setFont(undefined, "bold"); doc.setFontSize(7.5);
+      doc.text(`NOMBRE: ${(img.nombre || "—").toUpperCase()}`, cellX + boxW / 2, cellY + boxH + 5, { align: "center", maxWidth: boxW - 4 });
+    }
+    const filasUsadas = Math.ceil(Math.min(imagenesDetalle.length - Math.floor((imagenesDetalle.length - 1) / 4) * 4, 4) / cols);
+    y += filasUsadas * cellH;
+  }
+
   // --- Elaborado por ---
   newPageIfNeeded(7);
   box(L, R - L, 7, { fill: true });
@@ -2457,12 +2496,14 @@ function FichaTecnicaEditor({ diseno, onUpdate, catalogs }) {
         <TabBtn active={tab === "tiempos"} onClick={() => setTab("tiempos")} icon={<Factory size={14} />}>Tiempos y Ruta Operacional</TabBtn>
         <TabBtn active={tab === "calidad"} onClick={() => setTab("calidad")} icon={<ShieldCheck size={14} />}>Calidad y Anexos</TabBtn>
         <TabBtn active={tab === "medidas"} onClick={() => setTab("medidas")} icon={<Ruler size={14} />}>Tabla de Medidas</TabBtn>
+        <TabBtn active={tab === "imagenes"} onClick={() => setTab("imagenes")} icon={<ImageIcon size={14} />}>Imágenes</TabBtn>
       </div>
 
       {tab === "insumos" && <InsumosProduccionPanel diseno={diseno} catalogs={catalogs} />}
       {tab === "tiempos" && <TiemposRutaPanel diseno={diseno} />}
       {tab === "calidad" && <CalidadAnexosPanel diseno={diseno} />}
       {tab === "medidas" && <TablaMedidasPanel diseno={diseno} />}
+      {tab === "imagenes" && <ImagenesPanel diseno={diseno} />}
 
       {tab === "ficha" && (
         <>
@@ -3205,6 +3246,114 @@ function TablaMedidasPanel({ diseno }) {
           </>
         );
       })()}
+    </div>
+  );
+}
+
+function ImagenesPanel({ diseno }) {
+  const [imagenes, setImagenes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [uploadingId, setUploadingId] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const rows = await sb(`disenos_imagenes_detalle?master_code=eq.${encodeURIComponent(diseno.masterCode)}&select=*&order=orden.asc,created_at.asc`, { method: "GET" });
+      setImagenes(rows.map(imagenDetalleFromDB));
+    } catch (e) {
+      alert("No se pudo cargar las imágenes: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, [diseno?.masterCode]);
+
+  async function addImagen() {
+    try {
+      const [row] = await sb("disenos_imagenes_detalle", { method: "POST", body: JSON.stringify({ master_code: diseno.masterCode, nombre: "", orden: imagenes.length }) });
+      setImagenes(prev => [...prev, imagenDetalleFromDB(row)]);
+    } catch (e) { alert("No se pudo agregar: " + e.message); }
+  }
+  async function deleteImagen(id, nombre) {
+    if (!window.confirm(`¿Eliminar la foto "${nombre || "sin nombre"}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await sb(`disenos_imagenes_detalle?id=eq.${id}`, { method: "DELETE" });
+      setImagenes(prev => prev.filter(i => i.id !== id));
+    } catch (e) { alert("No se pudo eliminar: " + e.message); }
+  }
+  async function updateNombre(id, nombre) {
+    try {
+      const [row] = await sb(`disenos_imagenes_detalle?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ nombre }) });
+      setImagenes(prev => prev.map(i => i.id === id ? imagenDetalleFromDB(row) : i));
+    } catch (e) { alert("No se pudo guardar el nombre: " + e.message); }
+  }
+  async function handleUpload(id, file) {
+    setUploadingId(id);
+    try {
+      const { url } = await uploadFotoFile(diseno.masterCode, file);
+      const [row] = await sb(`disenos_imagenes_detalle?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ foto_url: url }) });
+      setImagenes(prev => prev.map(i => i.id === id ? imagenDetalleFromDB(row) : i));
+    } catch (e) { alert("No se pudo subir la foto: " + e.message); }
+    finally { setUploadingId(null); }
+  }
+
+  if (loading) return <div style={{ padding: "20px 0", color: TOKENS.inkSoft, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Loader2 size={14} className="spin" /> Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, padding: 14 }}>
+        <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Fotos detalladas de la prenda</div>
+        <p style={{ fontSize: 10.5, color: TOKENS.inkSoft, margin: "0 0 14px" }}>Sube cada foto y ponle un nombre debajo (ej. "Pliegue pretina"). En el PDF salen 4 por página; si agregas más, siguen en la página siguiente.</p>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+          {imagenes.map(img => (
+            <ImagenCard key={img.id} img={img} uploading={uploadingId === img.id}
+              onUpload={file => handleUpload(img.id, file)}
+              onNombreChange={nombre => updateNombre(img.id, nombre)}
+              onDelete={() => deleteImagen(img.id, img.nombre)}
+            />
+          ))}
+          <button onClick={addImagen} style={{
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
+            border: `1px dashed ${TOKENS.inkSoft}`, borderRadius: 8, minHeight: 150, background: "none",
+            color: TOKENS.inkSoft, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit",
+          }}>
+            <Plus size={18} /> Agregar foto
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImagenCard({ img, uploading, onUpload, onNombreChange, onDelete }) {
+  const [nombre, setNombre] = useState(img.nombre);
+  return (
+    <div style={{ border: `1px solid ${TOKENS.border}`, borderRadius: 8, padding: 10 }}>
+      <div style={{
+        width: "100%", height: 130, borderRadius: 6, background: TOKENS.bg, marginBottom: 8,
+        display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative",
+      }}>
+        {img.fotoUrl ? (
+          <img src={img.fotoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        ) : (
+          <ImageIcon size={24} color={TOKENS.inkSoft} />
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        <label style={{
+          flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          border: `1px dashed ${TOKENS.inkSoft}`, borderRadius: 6, padding: "6px 0", fontSize: 11, color: TOKENS.inkSoft, cursor: "pointer",
+        }}>
+          {uploading ? <Loader2 size={13} className="spin" /> : <Upload size={13} />} {uploading ? "Subiendo..." : img.fotoUrl ? "Reemplazar" : "Subir foto"}
+          <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploading} onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ""; }} />
+        </label>
+        <button onClick={onDelete} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", color: TOKENS.inkSoft, flexShrink: 0 }}><Trash2 size={14} /></button>
+      </div>
+      <input
+        style={{ ...input, fontSize: 12 }} placeholder="Nombre: (ej. Pliegue pretina)"
+        value={nombre} onChange={e => setNombre(e.target.value)} onBlur={() => onNombreChange(nombre)}
+      />
     </div>
   );
 }
